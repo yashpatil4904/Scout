@@ -10,17 +10,14 @@
 
 ---
 
-## Judge cheat-sheet (maps 1:1 to Ship It rubric)
+## At a glance
 
-| Rubric | How RepoReady scores |
+| | |
 | --- | --- |
-| **01 · Idea & Impact** | Real, daily developer pain: setup before first `npm start` / `python app.py`. Changes the outcome from “Google errors for 3 hours” → “install these 2 things, then boot.” |
-| **02 · Built on AWS (Ship It)** | **Lambda · API Gateway · DynamoDB · Amplify Hosting · SAM · CloudWatch**. LLM agents in the API path. Free-tier friendly serverless. |
-| **03 · Learning** | First full SAM deploy, Amplify hosting, Chrome Private Network Access / loopback constraints, agent-code cloud poll pattern, Groq as Bedrock fallback. |
-| **04 · Execution** | Working end-to-end: paste GitHub URL or local path → laptop fingerprint → % ready + crash timeline + approve-to-install. |
-| **05 · Demo video** | See [`DEMO.md`](DEMO.md) — 3-minute script: problem → live URL → agent link → score → AWS map. |
-
-**One feature that runs:** cloud analysis + local fingerprint → single readiness % and install list.
+| **Problem** | Setup hell before the first `npm start` / `python app.py` — CI and READMEs don’t measure *your* laptop |
+| **Outcome** | One readiness %, ordered crash preview, install list — nothing runs until you approve |
+| **AWS (Ship It)** | Lambda · API Gateway · DynamoDB · Amplify Hosting · SAM · CloudWatch · LLM agents in the API path |
+| **Works today** | Paste a GitHub URL or local path → laptop agent fingerprints this PC → score + timeline |
 
 ---
 
@@ -129,7 +126,7 @@ sequenceDiagram
 
 ---
 
-## Live demo (60 seconds)
+## Try it (60 seconds)
 
 1. Open **[RepoReady](https://main.d3qwc7ge49pla9.amplifyapp.com)** (hard-refresh if needed).  
 2. **Copy PowerShell command** → run in a terminal → leave window open.  
@@ -148,16 +145,14 @@ Expect `llm.enabled: true` and provider `groq` (or bedrock when enabled).
 
 ---
 
-## Learning (what we didn’t know on day one)
-
-Explicit Ship It “Learning” criteria:
+## What we learned building this
 
 1. **SAM → Lambda + HTTP API + DynamoDB** end-to-end deploy (`sam build` / `sam deploy`).  
 2. **Amplify Hosting** for a Vite SPA with baked-in `VITE_API_URL`.  
-3. **Browser security reality:** HTTPS pages cannot fingerprint a laptop via loopback — designed **agent-code polling** instead.  
-4. **Multi-agent LLM pipeline** (analyst → score → audit) with heuristic baseline so empty LLM replies don’t brick the product.  
+3. **Browser security:** HTTPS pages cannot fingerprint a laptop via loopback — so we use **agent-code polling** instead.  
+4. **Multi-agent LLM pipeline** (analyst → score → audit) with a heuristic baseline when the model returns empty content.  
 5. **Groq as production LLM** when Bedrock model access wasn’t available; Bedrock wiring kept for portability.  
-6. **Windows tooling quirks:** Store `python` stubs, `py -3`, PATH refresh, Smart App Control blocking `.cmd` downloads → PowerShell + agent code as primary link path.
+6. **Windows tooling quirks:** Store `python` stubs, `py -3`, PATH refresh, Smart App Control blocking `.cmd` downloads → PowerShell + agent code as the primary link path.
 
 ---
 
@@ -165,8 +160,7 @@ Explicit Ship It “Learning” criteria:
 
 ```text
 repo-checker/
-├── README.md                 ← you are here (Ship It narrative)
-├── DEMO.md                   ← 3-minute judge video script
+├── README.md                 ← product overview
 ├── amplify.yml               ← Amplify build
 ├── frontend/                 ← React + Vite + Tailwind → Amplify
 ├── backend/
@@ -259,9 +253,9 @@ GitHub clones do **not** spam missing `node_modules` packages (those folders are
 
 ---
 
-## Team / submission one-liner
+## One-liner
 
-**RepoReady is an AWS-shipped readiness checker:** serverless analysis on Lambda + DynamoDB, hosted on Amplify, with a local laptop agent and LLM ScoreAgent so students know what to install *before* the first crash — not after.
+**RepoReady** — serverless setup readiness on Amplify + Lambda + DynamoDB: a local laptop agent and LLM ScoreAgent so you know what to install *before* the first crash.
 
 ---
 
