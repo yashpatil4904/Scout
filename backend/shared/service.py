@@ -256,11 +256,19 @@ def ingest_results(session_id: str, payload: dict, store: SessionStore | None = 
     session = store.get(session_id)
     if not session:
         raise KeyError(session_id)
+
+    raw_fp = payload.get("fingerprint") if isinstance(payload, dict) else None
+    if not isinstance(raw_fp, dict) or not _fingerprint_looks_real(raw_fp):
+        raise ValueError(
+            "Laptop fingerprint missing or empty — agent did not report PC tools. "
+            "Keep the agent window open and re-run the check."
+        )
+
     session.status = "scoring"
     session.updated_at = _now()
     store.update(session)
 
-    session.fingerprint = Fingerprint.from_dict(payload.get("fingerprint"))
+    session.fingerprint = Fingerprint.from_dict(raw_fp)
     session.install = InstallResult.from_dict(payload.get("install"))
     session.boot = BootResult.from_dict(payload.get("boot"))
 
@@ -284,6 +292,7 @@ def ingest_results(session_id: str, payload: dict, store: SessionStore | None = 
         session.boot,
         snippets=session.analysis_snippets or {},
         probe=payload.get("probe") if isinstance(payload.get("probe"), dict) else None,
+        source=session.source or "github",
     )
     session.crash_preview = preview.to_dict()
     session.status = "complete"
@@ -292,7 +301,17 @@ def ingest_results(session_id: str, payload: dict, store: SessionStore | None = 
     return session
 
 
-def agent_heartbeat(agent_code: str, store: SessionStore | None = None) -> dict:
+def _fingerprint_looks_real(fp: dict) -> bool:
+    """Reject empty payloads that would falsely claim Python/git are missing."""
+    if not fp:
+        return False
+    os_name = str(fp.get("os") or "").strip().lower()
+    if os_name and os_name not in {"unknown", "none", "null"}:
+        return True
+    return bool(fp.get("python") or fp.get("node") or fp.get("git") or fp.get("tools"))
+
+
+def agent_heartbeat(agent_code: str, store: SessionStore | None = None, fingerprint: dict | None = None) -> dict:
     store = store or get_store()
     code = (agent_code or "").strip().lower()
     if not code:
@@ -300,7 +319,7 @@ def agent_heartbeat(agent_code: str, store: SessionStore | None = None) -> dict:
     prev = store.get_agent_heartbeat(code) or {}
     should_stop = bool(prev.get("stop"))
     # Heartbeat clears the stop latch after the agent observes it.
-    store.put_agent_heartbeat(code, stop=False)
+    store.put_agent_heartbeat(code, stop=False, fingerprint=fingerprint)
     return {"ok": True, "code": code, "stop": should_stop}
 
 
@@ -326,7 +345,14 @@ def agent_status(agent_code: str, store: SessionStore | None = None) -> dict:
         return {"ok": True, "online": False, "code": code}
     last = float(row.get("last_seen") or 0)
     online = (time.time() - last) < 12  # heartbeat every ~3s
-    return {"ok": True, "online": online, "code": code, "last_seen": last}
+    fp = row.get("fingerprint") if isinstance(row.get("fingerprint"), dict) else None
+    return {
+        "ok": True,
+        "online": online,
+        "code": code,
+        "last_seen": last,
+        "fingerprint": fp,
+    }
 
 
 def list_pending_sessions(agent_code: str, store: SessionStore | None = None) -> list[dict]:

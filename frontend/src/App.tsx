@@ -7,9 +7,11 @@ import ScoreGauge from "./components/ScoreGauge";
 import {
   API_BASE,
   USE_CLOUD_AGENT,
+  agentLinkCommand,
   approveInstall,
   connectAgentDownloadUrl,
   createSession,
+  generateAgentCode,
   getSavedAgentCode,
   getSession,
   probeBedrock,
@@ -20,7 +22,7 @@ import {
   triggerAgentRun,
   triggerLocalFolderCheck,
 } from "./api";
-import type { Session } from "./types";
+import type { Fingerprint, Session } from "./types";
 
 type Mode = "github" | "local";
 
@@ -39,8 +41,15 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [agentOnline, setAgentOnline] = useState<boolean | null>(null);
+  const [liveFingerprint, setLiveFingerprint] = useState<Fingerprint | null>(null);
   const [bedrockOn, setBedrockOn] = useState<boolean | null>(null);
-  const [agentCodeInput, setAgentCodeInput] = useState(() => getSavedAgentCode());
+  const [agentCodeInput, setAgentCodeInput] = useState(() => {
+    const saved = getSavedAgentCode();
+    if (saved.length >= 4) return saved;
+    const next = generateAgentCode();
+    saveAgentCode(next);
+    return next;
+  });
   const [stoppingAgent, setStoppingAgent] = useState(false);
 
   // Auto-link when connect.cmd opens Amplify with ?code=
@@ -59,9 +68,10 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     async function tick() {
-      const [ok, ai] = await Promise.all([probeLocalAgent(), probeBedrock()]);
+      const [probe, ai] = await Promise.all([probeLocalAgent(), probeBedrock()]);
       if (!cancelled) {
-        setAgentOnline(ok);
+        setAgentOnline(probe.online);
+        setLiveFingerprint(probe.fingerprint || null);
         setBedrockOn(ai);
       }
     }
@@ -99,6 +109,25 @@ export default function App() {
     setAgentPhase("Analyzing repository…");
     setSession(null);
     try {
+      if (USE_CLOUD_AGENT) {
+        const probe = await probeLocalAgent();
+        setAgentOnline(probe.online);
+        setLiveFingerprint(probe.fingerprint || null);
+        if (!probe.online) {
+          setError("Laptop agent not linked. Copy the PowerShell command, run it, then retry.");
+          setBusy(false);
+          setAgentPhase(null);
+          return;
+        }
+        if (!probe.fingerprint?.python && !probe.fingerprint?.node && !probe.fingerprint?.git) {
+          setError(
+            "Agent is online but has not reported PC tools yet. Wait 3 seconds and retry — or restart the agent.",
+          );
+          setBusy(false);
+          setAgentPhase(null);
+          return;
+        }
+      }
       const created = await createSession(url.trim());
       setSession(created);
       if (created.status === "error") {
@@ -134,11 +163,12 @@ export default function App() {
     setSession(null);
     try {
       const online = await probeLocalAgent();
-      setAgentOnline(online);
-      if (!online) {
+      setAgentOnline(online.online);
+      setLiveFingerprint(online.fingerprint || null);
+      if (!online.online) {
         setError(
           USE_CLOUD_AGENT
-            ? "Laptop agent not linked. Click “Download & run connector” once and leave that window open."
+            ? "Laptop agent not linked. Copy the PowerShell command, run it, and leave that window open."
             : "Local agent is offline. Run python agent/setup_check.py serve",
         );
         setBusy(false);
@@ -414,6 +444,32 @@ export default function App() {
                   Checks run on your machine. Use <em className="text-paper">Stop agent</em> in the
                   header when you&apos;re done — no need to touch the terminal.
                 </p>
+                {liveFingerprint ? (
+                  <dl className="mt-3 grid grid-cols-2 gap-2 font-mono text-[11px] text-slate-400">
+                    <div>
+                      <dt className="text-slate-600">Python</dt>
+                      <dd className="truncate text-paper">{liveFingerprint.python || "—"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-600">Node</dt>
+                      <dd className="truncate text-paper">{liveFingerprint.node || "—"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-600">git</dt>
+                      <dd className="truncate text-paper">{liveFingerprint.git || "—"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-600">OS</dt>
+                      <dd className="truncate text-paper">
+                        {liveFingerprint.os || "—"} {liveFingerprint.arch || ""}
+                      </dd>
+                    </div>
+                  </dl>
+                ) : (
+                  <p className="mt-2 font-mono text-[11px] text-pollen">
+                    Waiting for PC tool report from agent…
+                  </p>
+                )}
               </>
             ) : (
               <AgentBootstrap
@@ -505,53 +561,106 @@ function AgentBootstrap({
   setAgentCodeInput: (v: string) => void;
   onCodeSaved: () => void;
 }) {
+  const [copied, setCopied] = useState(false);
   const downloadUrl = connectAgentDownloadUrl();
+  const code = agentCodeInput.length >= 4 ? agentCodeInput : "";
+  const command = code ? agentLinkCommand(code) : "";
+
+  function ensureCode(): string {
+    if (agentCodeInput.length >= 4) return agentCodeInput;
+    const next = generateAgentCode();
+    setAgentCodeInput(next);
+    saveAgentCode(next);
+    return next;
+  }
 
   function saveCode() {
-    saveAgentCode(agentCodeInput);
+    const c = ensureCode();
+    saveAgentCode(c);
+    onCodeSaved();
+  }
+
+  async function copyCommand() {
+    const c = ensureCode();
+    saveAgentCode(c);
+    const cmd = agentLinkCommand(c);
+    await navigator.clipboard.writeText(cmd);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
     onCodeSaved();
   }
 
   return (
     <>
       <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-pollen">
-        Step 1 — link this laptop
+        Step 1 — link this laptop (agent code)
       </p>
       <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-slate-300">
-        <li>Click the button — downloads a tiny helper</li>
-        <li>Double-click it (Allow if Windows asks)</li>
-        <li>This page links automatically — then check any repo</li>
+        <li>
+          Copy the PowerShell command below (uses your agent code{" "}
+          <span className="font-mono text-moss">{code || "……"}</span>)
+        </li>
+        <li>Paste it in PowerShell and press Enter — leave that window open</li>
+        <li>Status flips to <em className="text-paper">laptop linked</em> automatically</li>
       </ol>
-      <a
-        href={downloadUrl}
-        className="mt-4 inline-block bg-moss px-4 py-3 font-mono text-xs uppercase tracking-[0.16em] text-ink-950"
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <label className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
+          Agent code
+        </label>
+        <input
+          value={agentCodeInput}
+          onChange={(e) => setAgentCodeInput(e.target.value.trim().toLowerCase())}
+          placeholder="click Generate"
+          className="w-36 border border-ink-700 bg-ink-950 px-3 py-2 font-mono text-sm text-paper outline-none focus:border-moss"
+        />
+        <button
+          type="button"
+          onClick={() => {
+            const next = generateAgentCode();
+            setAgentCodeInput(next);
+            saveAgentCode(next);
+            onCodeSaved();
+          }}
+          className="border border-ink-700 px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-slate-300 hover:text-paper"
+        >
+          Generate
+        </button>
+        <button
+          type="button"
+          onClick={saveCode}
+          disabled={agentCodeInput.length < 4}
+          className="border border-moss px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-moss disabled:opacity-40"
+        >
+          Use this code
+        </button>
+      </div>
+
+      <pre className="mt-3 overflow-x-auto border border-ink-700 bg-ink-950 p-3 font-mono text-[11px] leading-relaxed text-slate-300">
+        {command || "Generate or enter an agent code first"}
+      </pre>
+      <button
+        type="button"
+        onClick={copyCommand}
+        className="mt-3 bg-moss px-4 py-3 font-mono text-xs uppercase tracking-[0.16em] text-ink-950"
       >
-        Connect my laptop
-      </a>
+        {copied ? "Copied — paste in PowerShell" : "Copy PowerShell command"}
+      </button>
       <p className="mt-3 font-mono text-[10px] text-slate-500">
-        A black window stays open while linked. Stop it anytime with <span className="text-paper">Stop agent</span> in
-        the top-right.
+        Prefer not to download .cmd files (Smart App Control often blocks them). Stop the agent
+        anytime with <span className="text-paper">Stop agent</span> in the top-right.
       </p>
+
       <details className="mt-4">
         <summary className="cursor-pointer font-mono text-[11px] text-slate-500">
-          Troubleshooting / paste code
+          Alternate: download connector .cmd (may be blocked)
         </summary>
-        <div className="mt-2 flex gap-2">
-          <input
-            value={agentCodeInput}
-            onChange={(e) => setAgentCodeInput(e.target.value.trim().toLowerCase())}
-            placeholder="code from helper window"
-            className="w-full border border-ink-700 bg-ink-950 px-3 py-2 font-mono text-sm text-paper outline-none focus:border-moss"
-          />
-          <button
-            type="button"
-            onClick={saveCode}
-            disabled={agentCodeInput.length < 4}
-            className="shrink-0 border border-ink-700 px-4 py-2 font-mono text-[11px] uppercase tracking-wider text-slate-300 disabled:opacity-40"
-          >
-            Link
-          </button>
-        </div>
+        <a
+          href={downloadUrl}
+          className="mt-3 inline-block border border-ink-700 px-4 py-2 font-mono text-[11px] uppercase tracking-wider text-slate-300 hover:text-paper"
+        >
+          Download RepoReady-Connect.cmd
+        </a>
       </details>
     </>
   );

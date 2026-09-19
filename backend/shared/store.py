@@ -14,7 +14,7 @@ class SessionStore(Protocol):
     def get(self, session_id: str) -> Session | None: ...
     def update(self, session: Session) -> None: ...
     def list_pending_for_agent(self, agent_code: str) -> list[Session]: ...
-    def put_agent_heartbeat(self, agent_code: str, *, stop: bool | None = None) -> None: ...
+    def put_agent_heartbeat(self, agent_code: str, *, stop: bool | None = None, fingerprint: dict | None = None) -> None: ...
     def request_agent_stop(self, agent_code: str) -> None: ...
     def get_agent_heartbeat(self, agent_code: str) -> dict | None: ...
 
@@ -70,7 +70,7 @@ class FileStore:
                 out.append(sess)
         return out
 
-    def put_agent_heartbeat(self, agent_code: str, *, stop: bool | None = None) -> None:
+    def put_agent_heartbeat(self, agent_code: str, *, stop: bool | None = None, fingerprint: dict | None = None) -> None:
         code = (agent_code or "").strip().lower()
         if not code:
             return
@@ -86,6 +86,7 @@ class FileStore:
             "last_seen": time.time(),
             "ok": True,
             "stop": bool(prev.get("stop")) if stop is None else bool(stop),
+            "fingerprint": fingerprint if fingerprint is not None else prev.get("fingerprint"),
         }
         if stop is False:
             row["stop"] = False
@@ -149,7 +150,7 @@ class DynamoStore:
                 out.append(sess)
         return out
 
-    def put_agent_heartbeat(self, agent_code: str, *, stop: bool | None = None) -> None:
+    def put_agent_heartbeat(self, agent_code: str, *, stop: bool | None = None, fingerprint: dict | None = None) -> None:
         code = (agent_code or "").strip().lower()
         if not code:
             return
@@ -157,16 +158,18 @@ class DynamoStore:
         stop_flag = bool(prev.get("stop")) if stop is None else bool(stop)
         if stop is False:
             stop_flag = False
-        self.table.put_item(
-            Item={
-                "sessionId": f"_agent_{code}",
-                "kind": "agent_heartbeat",
-                "agent_code": code,
-                "last_seen": _to_dynamo(time.time()),
-                "ok": True,
-                "stop": stop_flag,
-            }
-        )
+        fp = fingerprint if fingerprint is not None else prev.get("fingerprint")
+        item = {
+            "sessionId": f"_agent_{code}",
+            "kind": "agent_heartbeat",
+            "agent_code": code,
+            "last_seen": _to_dynamo(time.time()),
+            "ok": True,
+            "stop": stop_flag,
+        }
+        if isinstance(fp, dict) and fp:
+            item["fingerprint"] = _to_dynamo(fp)
+        self.table.put_item(Item=item)
 
     def request_agent_stop(self, agent_code: str) -> None:
         self.put_agent_heartbeat(agent_code, stop=True)

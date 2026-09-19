@@ -98,8 +98,9 @@ def handler(event, _context):
     if path.endswith("/agent/heartbeat") and method == "POST":
         body = parse_body(event)
         code = (body.get("code") or code or "").strip()
+        fp = body.get("fingerprint") if isinstance(body.get("fingerprint"), dict) else None
         try:
-            return response(200, agent_heartbeat(code))
+            return response(200, agent_heartbeat(code, fingerprint=fp))
         except ValueError as exc:
             return response(400, {"error": str(exc)})
 

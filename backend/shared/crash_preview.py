@@ -168,10 +168,15 @@ def build_crash_preview(
     bt: BootResult | None = None,
     snippets: dict[str, str] | None = None,
     probe: dict | None = None,
+    *,
+    source: str = "github",
 ) -> CrashPreview:
     """
     Ordered 'future crash' timeline: what fails first on THIS PC if the student
     just runs the project — without waiting for error → Google → next error.
+
+    For GitHub clones, missing node_modules / venv packages are expected (those
+    folders are never pushed). Local folder checks still surface each miss.
     """
     req = req or Requirements()
     fp = fp or Fingerprint()
@@ -179,6 +184,7 @@ def build_crash_preview(
     bt = bt or BootResult()
     snippets = snippets or {}
     probe = probe or {}
+    is_local = (source or "github").lower() == "local"
 
     packages = list(req.packages or [])
     if not packages:
@@ -308,12 +314,60 @@ def build_crash_preview(
         # git only matters for clone; local folder checks skip
         pass
 
-    # --- 3. Packages (the unique part for no-manifest repos) ---
+    # --- 3. Packages ---
+    # GitHub: node_modules / venv are never in the clone — one install step, not N fails.
+    # Local: missing packages are unexpected and each miss is useful.
     probe_imports = {}
     if isinstance(probe.get("imports"), dict):
         probe_imports = {str(k): v for k, v in probe["imports"].items()}
 
-    if packages:
+    has_dep_manifest = any(
+        m.replace("\\", "/").split("/")[-1]
+        in {"requirements.txt", "package.json", "pyproject.toml", "Pipfile", "package-lock.json", "yarn.lock", "pnpm-lock.yaml"}
+        for m in (req.manifests_found or [])
+    )
+    install_fix = req.install_command or (
+        "pip install -r requirements.txt" if req.runtime == "python" else "npm install"
+    )
+
+    if packages and not is_local:
+        missing = []
+        present = []
+        for pkg in packages[:12]:
+            key = pkg.replace("-", "_").split("/")[0]
+            probed = probe_imports.get(pkg)
+            if probed is None:
+                probed = probe_imports.get(key)
+            if probed is True:
+                present.append(pkg)
+            elif probed is False or probed is None:
+                missing.append(pkg)
+        if ins.attempted and ins.ok:
+            add(
+                "ok",
+                "Dependencies installed",
+                "Sandboxed install succeeded after clone",
+                category="install",
+            )
+        elif missing:
+            sample = ", ".join(missing[:4])
+            more = f" (+{len(missing) - 4} more)" if len(missing) > 4 else ""
+            add(
+                "warn",
+                "Deps not installed yet (normal for a GitHub clone)",
+                f"Repos like node_modules / .venv are not pushed to GitHub. After clone, run install once. Missing until then: {sample}{more}",
+                "",
+                install_fix,
+                "install",
+            )
+        elif present:
+            add(
+                "ok",
+                "Sample packages already on this PC",
+                f"Dry-run found: {', '.join(present[:4])}",
+                category="package",
+            )
+    elif packages and is_local:
         for pkg in packages[:12]:
             key = pkg.replace("-", "_").split("/")[0]
             probed = probe_imports.get(pkg)
@@ -323,7 +377,7 @@ def build_crash_preview(
                 add(
                     "ok",
                     f"Package present: {pkg}",
-                    f"Dry-run import of {pkg} succeeded on this PC",
+                    f"Dry-run import of {pkg} succeeded in this folder",
                     category="package",
                 )
             elif probed is False:
@@ -341,13 +395,12 @@ def build_crash_preview(
                 add(
                     "fail",
                     f"Missing package: {pkg}",
-                    f"Code imports {pkg}; dry-run on this PC failed",
+                    f"Local project imports {pkg}, but it is not installed here (expected after npm install / venv)",
                     would,
-                    fix,
+                    req.install_command or fix,
                     "package",
                 )
             else:
-                # Not probed — predict miss if no install succeeded
                 if ins.attempted and ins.ok:
                     add(
                         "ok",
@@ -366,13 +419,7 @@ def build_crash_preview(
                         if req.runtime != "node"
                         else (req.install_command or "npm install")
                     )
-                    # Predict as fail only when no manifests (student has no install file)
-                    no_manifest = not any(
-                        m.replace("\\", "/").split("/")[-1]
-                        in {"requirements.txt", "package.json", "pyproject.toml", "Pipfile"}
-                        for m in (req.manifests_found or [])
-                    )
-                    if no_manifest:
+                    if not has_dep_manifest:
                         add(
                             "fail",
                             f"Will crash on missing package: {pkg}",
@@ -385,12 +432,11 @@ def build_crash_preview(
                         add(
                             "warn",
                             f"Needs dependency install for {pkg}",
-                            f"Manifest exists but install not verified on this PC yet",
+                            "Manifest exists but install not verified in this folder yet",
                             would,
                             req.install_command or fix,
                             "package",
                         )
-                    # Only first predicted package fail blocks the chain for clarity
                     break
     elif req.install_command and not ins.attempted:
         add(

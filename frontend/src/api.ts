@@ -1,4 +1,4 @@
-import type { Session } from "./types";
+import type { Fingerprint, Session } from "./types";
 
 export const API_BASE = (import.meta.env.VITE_API_URL || "http://127.0.0.1:8787").replace(
   /\/$/,
@@ -30,6 +30,32 @@ export function saveAgentCode(code: string) {
   } catch {
     /* ignore */
   }
+}
+
+/** Short hex code the laptop agent and this browser share. */
+export function generateAgentCode(): string {
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** PowerShell one-liner — no .cmd download (avoids Smart App Control blocks). */
+export function agentLinkCommand(code: string): string {
+  const c = code.trim().toLowerCase();
+  // Prefer `py -3` on Windows (avoids Store stub); fall back to python.
+  return (
+    `irm ${API_BASE}/agent.py -OutFile $env:TEMP\\setup_check.py; ` +
+    `if (Get-Command py -ErrorAction SilentlyContinue) { ` +
+    `py -3 $env:TEMP\\setup_check.py serve --api ${API_BASE} --code ${c} ` +
+    `} else { ` +
+    `python $env:TEMP\\setup_check.py serve --api ${API_BASE} --code ${c} }`
+  );
+}
+
+export function connectAgentDownloadUrl(): string {
+  const ret =
+    typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
+  return `${API_BASE}/agent/connect.cmd?return=${encodeURIComponent(ret || "https://main.d3qwc7ge49pla9.amplifyapp.com")}`;
 }
 
 async function parseError(res: Response): Promise<string> {
@@ -65,22 +91,30 @@ export async function getSession(sessionId: string): Promise<Session> {
   return res.json();
 }
 
-export async function probeCloudAgent(code?: string): Promise<boolean> {
+export type AgentProbe = {
+  online: boolean;
+  fingerprint?: Fingerprint | null;
+};
+
+export async function probeCloudAgent(code?: string): Promise<AgentProbe> {
   const c = (code || getSavedAgentCode()).trim().toLowerCase();
-  if (!c) return false;
+  if (!c) return { online: false };
   try {
     const res = await fetch(`${API_BASE}/agent/status?code=${encodeURIComponent(c)}`, {
       cache: "no-store",
     });
-    if (!res.ok) return false;
+    if (!res.ok) return { online: false };
     const data = await res.json();
-    return Boolean(data?.online);
+    return {
+      online: Boolean(data?.online),
+      fingerprint: (data?.fingerprint as Fingerprint) || null,
+    };
   } catch {
-    return false;
+    return { online: false };
   }
 }
 
-export async function probeLocalAgent(): Promise<boolean> {
+export async function probeLocalAgent(): Promise<AgentProbe> {
   if (USE_CLOUD_AGENT) {
     return probeCloudAgent();
   }
@@ -90,11 +124,11 @@ export async function probeLocalAgent(): Promise<boolean> {
       mode: "cors",
       cache: "no-store",
     });
-    if (!res.ok) return false;
+    if (!res.ok) return { online: false };
     const data = await res.json();
-    return Boolean(data?.ok);
+    return { online: Boolean(data?.ok) };
   } catch {
-    return false;
+    return { online: false };
   }
 }
 
@@ -145,7 +179,7 @@ export async function createLocalIntent(
 ): Promise<Session> {
   const code = (agentCode || getSavedAgentCode()).trim();
   if (!code) {
-    throw new Error("Connect this laptop first (one-click Connect button)");
+    throw new Error("Link this laptop first — paste the agent code from the terminal");
   }
   const res = await fetch(`${API_BASE}/sessions/local-intent`, {
     method: "POST",
@@ -177,12 +211,6 @@ export async function stopLaptopAgent(code?: string): Promise<{ ok: boolean; err
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Stop failed" };
   }
-}
-
-export function connectAgentDownloadUrl(): string {
-  const ret =
-    typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
-  return `${API_BASE}/agent/connect.cmd?return=${encodeURIComponent(ret || "https://main.d3qwc7ge49pla9.amplifyapp.com")}`;
 }
 
 export async function triggerLocalFolderCheck(

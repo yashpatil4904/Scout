@@ -133,6 +133,24 @@ type Props = {
 };
 
 export default function CompatTable({ requirements, fingerprint }: Props) {
+  const empty =
+    !fingerprint?.python &&
+    !fingerprint?.node &&
+    !fingerprint?.git &&
+    (!fingerprint?.os || fingerprint.os === "unknown");
+  if (empty) {
+    return (
+      <div className="border border-pollen bg-ink-900 p-5">
+        <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-pollen">
+          Your PC vs this repo
+        </p>
+        <p className="mt-2 text-sm text-slate-300">
+          No laptop fingerprint yet — the agent did not report what&apos;s installed on this PC.
+          Keep the agent window open and run the check again.
+        </p>
+      </div>
+    );
+  }
   const rows = buildRows(requirements, fingerprint);
   return (
     <div className="border border-ink-700 bg-ink-900 p-5">

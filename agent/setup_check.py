@@ -676,9 +676,31 @@ def run_sidecar(*, port: int, default_api: str, agent_code: str = "") -> int:
         print(f"  AGENT CODE  →  {code}")
         print(f"  Leave this window open. Stop anytime from the website.")
         print(f"{'=' * 56}\n")
+        # Fingerprint once at start so UI can show live PC tools before any check.
+        try:
+            live_fp = fingerprint_machine({})
+            _print_fingerprint(live_fp)
+        except Exception as exc:
+            live_fp = {"os": platform.system(), "python": f"Python {sys.version_info[0]}.{sys.version_info[1]}", "error": str(exc)}
+            sys.stderr.write(f"[agent] initial fingerprint failed: {exc}\n")
         while not stop.is_set():
             try:
-                hb = api_post(f"{default_api}/agent/heartbeat", {"code": code})
+                hb = api_post(
+                    f"{default_api}/agent/heartbeat",
+                    {
+                        "code": code,
+                        "fingerprint": {
+                            "os": live_fp.get("os"),
+                            "arch": live_fp.get("arch"),
+                            "python": live_fp.get("python"),
+                            "node": live_fp.get("node"),
+                            "npm": live_fp.get("npm"),
+                            "pip": live_fp.get("pip"),
+                            "git": live_fp.get("git"),
+                            "tools": (live_fp.get("tools") or [])[:12],
+                        },
+                    },
+                )
                 if isinstance(hb, dict) and hb.get("stop"):
                     print("\n[agent] Stop requested from RepoReady UI — shutting down.")
                     stop.set()
@@ -724,6 +746,11 @@ def run_sidecar(*, port: int, default_api: str, agent_code: str = "") -> int:
                         skip_boot=True,
                         local_workdir=workdir.resolve() if workdir and workdir.is_dir() else None,
                     )
+                    # Refresh live fingerprint after a job (tools may have been installed).
+                    try:
+                        live_fp = fingerprint_machine({})
+                    except Exception:
+                        pass
                     with lock:
                         jobs[sid] = "done"
                 except Exception as exc:
@@ -1037,10 +1064,18 @@ def _scan_packages_from_folder(folder: Path, runtime: str) -> list[str]:
 
 
 def fingerprint_machine(req: dict) -> dict:
-    python_ver = cmd_version([sys.executable, "--version"]) or ".".join(map(str, sys.version_info[:3]))
+    _refresh_host_path()
+    python_ver = (
+        cmd_version([sys.executable, "--version"])
+        or f"Python {'.'.join(map(str, sys.version_info[:3]))}"
+    )
+    # Also surface the `py` launcher version when present (common on Windows).
+    py_launcher = cmd_version(["py", "-3", "--version"]) or cmd_version(["py", "--version"])
+    if py_launcher and py_launcher not in (python_ver or ""):
+        python_ver = f"{python_ver} (py: {py_launcher})"
+
     node = cmd_version(["node", "--version"])
     npm = cmd_version(["npm", "--version"]) or cmd_version(["npm.cmd", "--version"])
-    # If Node is present, npm almost always is too — resolve via which as a fallback.
     if not npm and (node or resolve_cmd("npm")):
         npm = cmd_version(["npm", "--version"]) or ("available" if resolve_cmd("npm") else None)
 
@@ -1062,8 +1097,9 @@ def fingerprint_machine(req: dict) -> dict:
         "pyenv",
         "nvm",
         "corepack",
+        "py",
     ):
-        if resolve_cmd(name):
+        if resolve_cmd(name) or (name == "git" and _git_fallback_path()):
             tools.append(name)
 
     env_required = list(req.get("env_vars") or [])
@@ -1080,6 +1116,19 @@ def fingerprint_machine(req: dict) -> dict:
         else:
             svc_missing.append(svc)
 
+    git_ver = cmd_version(["git", "--version"])
+    if not git_ver:
+        git_bin = _git_fallback_path()
+        if git_bin:
+            git_ver = cmd_version([git_bin, "--version"])
+
+    pip_ver = (
+        cmd_version([sys.executable, "-m", "pip", "--version"])
+        or cmd_version(["pip", "--version"])
+        or cmd_version(["pip3", "--version"])
+        or cmd_version(["py", "-3", "-m", "pip", "--version"])
+    )
+
     return {
         "os": platform.system(),
         "os_version": platform.version(),
@@ -1088,11 +1137,9 @@ def fingerprint_machine(req: dict) -> dict:
         "disk_mb": disk_mb(),
         "python": python_ver,
         "node": node,
-        "pip": cmd_version([sys.executable, "-m", "pip", "--version"])
-        or cmd_version(["pip", "--version"])
-        or cmd_version(["pip3", "--version"]),
+        "pip": pip_ver,
         "npm": npm,
-        "git": cmd_version(["git", "--version"]),
+        "git": git_ver,
         "docker": cmd_version(["docker", "--version"]),
         "tools": tools,
         "env_vars_present": present,
@@ -1100,6 +1147,51 @@ def fingerprint_machine(req: dict) -> dict:
         "services_running": running,
         "services_missing": svc_missing,
     }
+
+
+def _refresh_host_path() -> None:
+    """Reload machine+user PATH so tools installed outside this shell are visible."""
+    if not WINDOWS:
+        return
+    try:
+        import winreg
+
+        parts: list[str] = []
+        for root, sub in (
+            (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+            (winreg.HKEY_CURRENT_USER, "Environment"),
+        ):
+            try:
+                with winreg.OpenKey(root, sub) as key:
+                    val, _ = winreg.QueryValueEx(key, "Path")
+                    if val:
+                        parts.append(str(val))
+            except OSError:
+                pass
+        if not parts:
+            return
+        merged = os.pathsep.join(parts)
+        # Keep current process dirs first, then registry PATH.
+        current = os.environ.get("PATH") or ""
+        os.environ["PATH"] = os.pathsep.join(
+            [p for p in (current.split(os.pathsep) + merged.split(os.pathsep)) if p]
+        )
+    except Exception:
+        pass
+
+
+def _git_fallback_path() -> str | None:
+    if not WINDOWS:
+        return None
+    candidates = [
+        r"C:\Program Files\Git\cmd\git.exe",
+        r"C:\Program Files (x86)\Git\cmd\git.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Git\cmd\git.exe"),
+    ]
+    for path in candidates:
+        if path and Path(path).is_file():
+            return path
+    return None
 
 
 def run_install(repo: Path, req: dict, timeout: int) -> dict:
@@ -1355,6 +1447,8 @@ def resolve_cmd(name: str) -> str | None:
             found = shutil.which(name if name.lower().endswith(ext) else name + ext)
             if found:
                 return found
+        if name.lower() == "git":
+            return _git_fallback_path()
     return None
 
 

@@ -284,6 +284,7 @@ def test_future_crash_timeline_orders_runtime_before_packages():
         InstallResult(attempted=False),
         BootResult(attempted=False),
         probe={"imports": {"sklearn": False, "pandas": False}},
+        source="local",
     )
     assert preview.frames
     assert preview.frames[0].status == "fail"
@@ -310,7 +311,69 @@ def test_future_crash_predicts_missing_module_without_manifest():
         InstallResult(attempted=False),
         BootResult(attempted=False),
         probe={"imports": {"sklearn": False}},
+        source="local",
     )
     fails = [f for f in preview.frames if f.status == "fail"]
     assert fails
     assert "ModuleNotFoundError" in (fails[0].would_see or "")
+
+
+def test_github_clone_does_not_spam_missing_packages():
+    """node_modules / venv are not in GitHub — one install warn, not N package fails."""
+    from shared.crash_preview import build_crash_preview
+
+    pkgs = [
+        "@supabase/supabase-js",
+        "@tailwindcss/vite",
+        "@vitejs/plugin-react",
+        "bcryptjs",
+        "cors",
+        "dotenv",
+        "eslint",
+    ]
+    preview = build_crash_preview(
+        Requirements(
+            runtime="node",
+            packages=pkgs,
+            install_command="npm install",
+            manifests_found=["package.json"],
+            start_command="npm run dev",
+        ),
+        Fingerprint(os="Windows", node="20.11.0", npm="10.2.4", git="git"),
+        InstallResult(attempted=False),
+        BootResult(attempted=False),
+        probe={"imports": {p: False for p in pkgs}},
+        source="github",
+    )
+    package_fails = [
+        f for f in preview.frames if f.status == "fail" and "Missing package" in f.title
+    ]
+    assert not package_fails
+    install_warns = [
+        f
+        for f in preview.frames
+        if "Deps not installed" in f.title or "normal for a GitHub clone" in f.title
+    ]
+    assert install_warns
+    assert "npm install" in (install_warns[0].fix or "")
+
+
+def test_local_folder_still_lists_missing_packages():
+    from shared.crash_preview import build_crash_preview
+
+    preview = build_crash_preview(
+        Requirements(
+            runtime="node",
+            packages=["cors", "dotenv"],
+            install_command="npm install",
+            manifests_found=["package.json"],
+        ),
+        Fingerprint(os="Windows", node="20.11.0", npm="10.2.4", git="git"),
+        InstallResult(attempted=False),
+        BootResult(attempted=False),
+        probe={"imports": {"cors": False, "dotenv": False}},
+        source="local",
+    )
+    missing = [f for f in preview.frames if "Missing package" in f.title]
+    assert len(missing) >= 1
+    assert missing[0].status in {"fail", "skip"}

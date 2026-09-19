@@ -24,4 +24,6 @@ def handler(event, _context):
         session = ingest_results(session_id, payload)
     except KeyError:
         return response(404, {"error": "session not found"})
+    except ValueError as exc:
+        return response(400, {"error": str(exc)})
     return response(200, to_dict(session))
