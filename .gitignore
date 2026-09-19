@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+backend/.sessions.json
+backend/.sessions.json.bak
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# AWS / SAM
+.aws-sam/
+samconfig.toml
+
+# Agent temp
+.setup-check/
+*.log
+backend/.sessions.json
+backend/.sessions.json.bak

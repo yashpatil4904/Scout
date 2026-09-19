@@ -1,0 +1,10 @@
+.pytest_cache/
+**/__pycache__/
+*.pyc
+.sessions.json
+.sessions.json.tmp
+tests/
+*.md
+check_llm.py
+check_bedrock.py
+dev_server.py

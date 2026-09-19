@@ -1,0 +1,5 @@
+# Local FastAPI + tests (Lambda uses requirements-lambda.txt via SAM Metadata)
+-r requirements-lambda.txt
+fastapi>=0.115.0
+uvicorn>=0.32.0
+pytest>=8.0.0

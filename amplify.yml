@@ -1,0 +1,20 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - cd frontend && npm ci
+    build:
+      commands:
+        - cd frontend && npm run build
+  artifacts:
+    baseDirectory: frontend/dist
+    files:
+      - "**/*"
+  cache:
+    paths:
+      - frontend/node_modules/**/*
+# Set Amplify env vars before build:
+#   VITE_API_URL = SAM output ApiBaseUrl (https://xxxx.execute-api.us-east-1.amazonaws.com)
+#   VITE_AGENT_URL = http://127.0.0.1:9877
+

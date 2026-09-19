@@ -1,0 +1,212 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Setup Readiness Checker — Lambda, HTTP API, DynamoDB, Groq LLM (Bedrock optional), Amplify frontend
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 90
+    MemorySize: 512
+    Architectures: [x86_64]
+    Environment:
+      Variables:
+        SESSIONS_TABLE: !Ref SessionsTable
+        PUBLIC_API_BASE: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        BEDROCK_DISABLED: !Ref BedrockDisabled
+        GROQ_API_KEY: !Ref GroqApiKey
+        GROQ_MODEL: !Ref GroqModel
+        LLM_PROVIDER: !Ref LlmProvider
+        GITHUB_TOKEN: !Ref GitHubToken
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization'"
+      AllowOrigin: "'*'"
+
+Parameters:
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+    Description: Amazon Bedrock model id (unused when BedrockDisabled=1)
+  BedrockDisabled:
+    Type: String
+    Default: "1"
+    AllowedValues: ["0", "1"]
+    Description: Set 1 while this account cannot invoke Bedrock (use Groq)
+  GroqApiKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Groq API key for ScoreAgent / RepoAnalyst (required when Bedrock is disabled)
+  GroqModel:
+    Type: String
+    Default: openai/gpt-oss-20b
+  LlmProvider:
+    Type: String
+    Default: auto
+    AllowedValues: [auto, groq, bedrock]
+  GitHubToken:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Optional GitHub token to raise API rate limits
+
+Resources:
+  SessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: sessionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sessionId
+          KeyType: HASH
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: ["Content-Type", "Authorization"]
+
+  AnalyzeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas.analyze.handler.handler
+      Timeout: 90
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SessionsTable
+        - Statement:
+            - Effect: Allow
+              Action: [bedrock:InvokeModel]
+              Resource: "*"
+      Events:
+        PostSessions:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /sessions
+            Method: POST
+    Metadata:
+      BuildMethod: python3.12
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
+
+  LocalSessionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas.local_session.handler.handler
+      Timeout: 90
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SessionsTable
+        - Statement:
+            - Effect: Allow
+              Action: [bedrock:InvokeModel]
+              Resource: "*"
+      Events:
+        PostLocalSessions:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /sessions/local
+            Method: POST
+    Metadata:
+      BuildMethod: python3.12
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
+
+  GetSessionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas.get_session.handler.handler
+      Timeout: 10
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref SessionsTable
+      Events:
+        GetSession:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /sessions/{id}
+            Method: GET
+    Metadata:
+      BuildMethod: python3.12
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
+
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas.ingest.handler.handler
+      Timeout: 90
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SessionsTable
+        - Statement:
+            - Effect: Allow
+              Action: [bedrock:InvokeModel]
+              Resource: "*"
+      Events:
+        PostResults:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /sessions/{id}/results
+            Method: POST
+    Metadata:
+      BuildMethod: python3.12
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
+
+  AgentScriptFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas.agent_script.handler.handler
+      Timeout: 10
+      Events:
+        GetAgent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /agent.py
+            Method: GET
+    Metadata:
+      BuildMethod: python3.12
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas.health.handler.handler
+      Timeout: 5
+      Events:
+        Health:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /health
+            Method: GET
+    Metadata:
+      BuildMethod: python3.12
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
+
+Outputs:
+  ApiBaseUrl:
+    Description: HTTP API base URL for the frontend and agent
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  SessionsTableName:
+    Value: !Ref SessionsTable
