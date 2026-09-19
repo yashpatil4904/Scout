@@ -3,6 +3,7 @@ import AgentStatus from "./components/AgentStatus";
 import BlockerList from "./components/BlockerList";
 import CompatTable from "./components/CompatTable";
 import CrashTimeline from "./components/CrashTimeline";
+import Landing from "./components/Landing";
 import ScoreGauge from "./components/ScoreGauge";
 import {
   API_BASE,
@@ -25,6 +26,7 @@ import {
 import type { Fingerprint, Session } from "./types";
 
 type Mode = "github" | "local";
+type View = "landing" | "app";
 
 const EXAMPLES = [
   "https://github.com/pallets/flask",
@@ -33,6 +35,16 @@ const EXAMPLES = [
 ];
 
 export default function App() {
+  const [view, setView] = useState<View>(() => {
+    if (typeof window === "undefined") return "landing";
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("code") || params.get("app") === "1") return "app";
+    try {
+      return sessionStorage.getItem("repoready_view") === "app" ? "app" : "landing";
+    } catch {
+      return "landing";
+    }
+  });
   const [mode, setMode] = useState<Mode>("github");
   const [url, setUrl] = useState("");
   const [localPath, setLocalPath] = useState("");
@@ -52,6 +64,24 @@ export default function App() {
   });
   const [stoppingAgent, setStoppingAgent] = useState(false);
 
+  function openApp() {
+    setView("app");
+    try {
+      sessionStorage.setItem("repoready_view", "app");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function openLanding() {
+    setView("landing");
+    try {
+      sessionStorage.setItem("repoready_view", "landing");
+    } catch {
+      /* ignore */
+    }
+  }
+
   // Auto-link when connect.cmd opens Amplify with ?code=
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -59,6 +89,7 @@ export default function App() {
     if (code.length >= 4) {
       saveAgentCode(code);
       setAgentCodeInput(code);
+      openApp();
       params.delete("code");
       const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${window.location.hash}`;
       window.history.replaceState({}, "", next);
@@ -282,124 +313,132 @@ export default function App() {
     [session, busy, agentPhase, mode],
   );
 
+  if (view === "landing") {
+    return <Landing onStart={openApp} />;
+  }
+
   return (
-    <div className="min-h-screen bg-ink-950">
-      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-ink-700 px-6 py-5 md:px-10">
-        <div>
-          <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-moss">RepoReady</p>
-          <h1 className="font-display text-2xl text-paper md:text-3xl">
-            Will this repo run on your laptop?
-          </h1>
-          <p className="mt-1 max-w-xl text-sm text-slate-400">
-            Compare what the project needs vs what you have installed — before you waste hours on
-            setup.
-          </p>
-        </div>
-        <div className="flex flex-col items-end gap-2">
-          <p className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
-            {bedrockOn ? "AI scoring on" : "heuristic scoring"}
-          </p>
+    <div className="min-h-screen bg-[#f4f5f7]">
+      <header className="hairline sticky top-0 z-20">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4 md:px-10">
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={openLanding}
+              className="font-display text-lg font-bold tracking-tight text-ink-900 hover:text-sea"
+            >
+              Scout
+            </button>
+            <span className="hidden font-mono text-[10px] uppercase tracking-wider text-ink-600 sm:inline">
+              {bedrockOn ? "AI scoring" : "heuristic"}
+            </span>
+          </div>
           <AgentStatus online={agentOnline} onStop={onStopAgent} stopping={stoppingAgent} />
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-6xl gap-10 px-6 py-10 md:px-10 lg:grid-cols-[1.1fr_0.9fr]">
-        <section>
-          <div className="mb-4 flex gap-2">
-            <ModeTab active={mode === "github"} onClick={() => setMode("github")}>
-              GitHub URL
-            </ModeTab>
-            <ModeTab active={mode === "local"} onClick={() => setMode("local")}>
-              Local folder
-            </ModeTab>
+      <main className="mx-auto grid max-w-6xl gap-8 px-6 py-8 md:px-10 lg:grid-cols-[1fr_0.95fr] lg:gap-8">
+        <section className="space-y-6">
+          <div className="panel p-6 md:p-8">
+            <p className="section-label">Check this laptop</p>
+            <h1 className="mt-2 font-display text-3xl font-bold tracking-tight text-ink-900 md:text-4xl">
+              What should I install?
+            </h1>
+
+            <div className="mt-8 flex gap-6 border-b border-[#d0d7e0]">
+              <ModeTab active={mode === "github"} onClick={() => setMode("github")}>
+                GitHub URL
+              </ModeTab>
+              <ModeTab active={mode === "local"} onClick={() => setMode("local")}>
+                Local folder
+              </ModeTab>
+            </div>
+
+            {mode === "github" ? (
+              <form onSubmit={onGithubSubmit} className="mt-6 space-y-4">
+                <label className="section-label">Public GitHub repo</label>
+                <p className="text-sm leading-relaxed text-ink-700">
+                  We infer runtime and deps, then compare them to{" "}
+                  <em className="font-medium text-ink-900">this</em> PC. Nothing installs until you
+                  approve.
+                </p>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
+                  <input
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    placeholder="https://github.com/owner/repo"
+                    className="field flex-1"
+                  />
+                  <button
+                    type="submit"
+                    disabled={busy || !url.trim()}
+                    className="btn-primary shrink-0"
+                  >
+                    {busy ? "Checking…" : "Check my laptop"}
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  {EXAMPLES.map((example) => (
+                    <button
+                      key={example}
+                      type="button"
+                      onClick={() => setUrl(example)}
+                      className="font-mono text-[11px] text-ink-600 hover:text-sea"
+                    >
+                      {example.replace("https://github.com/", "")}
+                    </button>
+                  ))}
+                </div>
+                {error ? <p className="text-sm font-medium text-rust">{error}</p> : null}
+              </form>
+            ) : (
+              <form onSubmit={onLocalSubmit} className="mt-6 space-y-4">
+                <label className="section-label">Folder on this PC</label>
+                <p className="text-sm leading-relaxed text-ink-700">
+                  Your linked agent reads that path locally — only manifests/snippets go to the
+                  cloud.
+                </p>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
+                  <input
+                    value={localPath}
+                    onChange={(e) => setLocalPath(e.target.value)}
+                    placeholder={
+                      /Win/i.test(navigator.userAgent)
+                        ? "C:\\Users\\you\\Desktop\\my-project"
+                        : "/Users/you/projects/my-project"
+                    }
+                    className="field flex-1"
+                  />
+                  <button
+                    type="submit"
+                    disabled={busy || !localPath.trim()}
+                    className="btn-primary shrink-0"
+                  >
+                    {busy ? "Checking…" : "Check folder"}
+                  </button>
+                </div>
+                <details>
+                  <summary className="cursor-pointer font-mono text-[11px] text-ink-600">
+                    Prefer CLI?
+                  </summary>
+                  <p className="code-block mt-2 break-all text-[11px]">
+                    python agent/setup_check.py --path &quot;{localPath || "."}&quot; --api{" "}
+                    {API_BASE}
+                  </p>
+                </details>
+                {error ? <p className="text-sm font-medium text-rust">{error}</p> : null}
+              </form>
+            )}
           </div>
 
-          {mode === "github" ? (
-            <form onSubmit={onGithubSubmit} className="border border-ink-700 bg-ink-900 p-5">
-              <label className="font-mono text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                Paste a public GitHub repo
-              </label>
-              <p className="mt-2 text-sm text-slate-400">
-                We infer runtime &amp; deps (even without a README), then show what to install on{" "}
-                <em className="text-paper">this</em> PC. Nothing installs until you approve.
-              </p>
-              <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-                <input
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://github.com/owner/repo"
-                  className="w-full border border-ink-700 bg-ink-950 px-3 py-3 font-mono text-sm text-paper outline-none focus:border-moss"
-                />
-                <button
-                  type="submit"
-                  disabled={busy || !url.trim()}
-                  className="shrink-0 bg-moss px-5 py-3 font-mono text-xs uppercase tracking-[0.16em] text-ink-950 disabled:opacity-40"
-                >
-                  {busy ? "Checking…" : "Check my laptop"}
-                </button>
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {EXAMPLES.map((example) => (
-                  <button
-                    key={example}
-                    type="button"
-                    onClick={() => setUrl(example)}
-                    className="font-mono text-[11px] text-slate-500 hover:text-moss"
-                  >
-                    {example.replace("https://github.com/", "")}
-                  </button>
-                ))}
-              </div>
-              {error ? <p className="mt-3 font-mono text-sm text-rust">{error}</p> : null}
-            </form>
-          ) : (
-            <form onSubmit={onLocalSubmit} className="border border-ink-700 bg-ink-900 p-5">
-              <label className="font-mono text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                Path to a folder on this PC
-              </label>
-              <p className="mt-2 text-sm text-slate-400">
-                Your linked laptop agent reads that folder locally — the cloud never sees your full
-                source tree beyond setup manifests.
-              </p>
-              <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-                <input
-                  value={localPath}
-                  onChange={(e) => setLocalPath(e.target.value)}
-                  placeholder={
-                    /Win/i.test(navigator.userAgent)
-                      ? "C:\\Users\\you\\Desktop\\my-project"
-                      : "/Users/you/projects/my-project"
-                  }
-                  className="w-full border border-ink-700 bg-ink-950 px-3 py-3 font-mono text-sm text-paper outline-none focus:border-moss"
-                />
-                <button
-                  type="submit"
-                  disabled={busy || !localPath.trim()}
-                  className="shrink-0 bg-moss px-5 py-3 font-mono text-xs uppercase tracking-[0.16em] text-ink-950 disabled:opacity-40"
-                >
-                  {busy ? "Checking…" : "Check folder"}
-                </button>
-              </div>
-              <details className="mt-3">
-                <summary className="cursor-pointer font-mono text-[11px] text-slate-500">
-                  Prefer CLI?
-                </summary>
-                <p className="mt-2 break-all font-mono text-[11px] text-moss">
-                  python agent/setup_check.py --path &quot;{localPath || "."}&quot; --api {API_BASE}
-                </p>
-              </details>
-              {error ? <p className="mt-3 font-mono text-sm text-rust">{error}</p> : null}
-            </form>
-          )}
-
-          <div className="mt-8 flex flex-col items-center gap-4 lg:items-start">
+          <div className="panel flex flex-col items-center gap-4 p-6 md:items-start md:p-8">
             <ScoreGauge percent={percent} label={label} />
             {session?.session_id && session.status === "complete" ? (
               <button
                 type="button"
                 onClick={onRescan}
                 disabled={busy}
-                className="border border-ink-700 px-4 py-2 font-mono text-[11px] uppercase tracking-wider text-slate-300 hover:border-moss hover:text-moss disabled:opacity-40"
+                className="btn-ghost text-xs"
               >
                 {busy ? "Scanning…" : "Rescan this machine"}
               </button>
@@ -407,67 +446,74 @@ export default function App() {
           </div>
 
           {session?.fingerprint ? (
-            <dl className="mt-8 grid grid-cols-2 gap-3 font-mono text-xs text-slate-400 sm:grid-cols-3 lg:grid-cols-4">
-              <Fact
-                label="This OS"
-                value={`${session.fingerprint.os || "?"} ${session.fingerprint.arch || ""}`}
-              />
-              <Fact
-                label="RAM"
-                value={
-                  session.fingerprint.ram_mb
-                    ? `${Math.round(session.fingerprint.ram_mb / 1024)} GB`
-                    : "—"
-                }
-              />
-              <Fact label="Python here" value={session.fingerprint.python || "missing"} />
-              <Fact label="Node here" value={session.fingerprint.node || "missing"} />
-              <Fact label="npm here" value={session.fingerprint.npm || "missing"} />
-              <Fact label="git here" value={session.fingerprint.git || "missing"} />
-              <Fact label="Docker here" value={session.fingerprint.docker || "missing"} />
-              <Fact
-                label="Tools on PATH"
-                value={(session.fingerprint.tools || []).slice(0, 6).join(", ") || "—"}
-              />
-            </dl>
+            <div className="panel p-6 md:p-8">
+              <p className="section-label mb-4">Fingerprint</p>
+              <dl className="grid grid-cols-2 gap-x-6 gap-y-4 font-mono text-xs sm:grid-cols-3">
+                <Fact
+                  label="This OS"
+                  value={`${session.fingerprint.os || "?"} ${session.fingerprint.arch || ""}`}
+                />
+                <Fact
+                  label="RAM"
+                  value={
+                    session.fingerprint.ram_mb
+                      ? `${Math.round(session.fingerprint.ram_mb / 1024)} GB`
+                      : "—"
+                  }
+                />
+                <Fact label="Python" value={session.fingerprint.python || "missing"} />
+                <Fact label="Node" value={session.fingerprint.node || "missing"} />
+                <Fact label="npm" value={session.fingerprint.npm || "missing"} />
+                <Fact label="git" value={session.fingerprint.git || "missing"} />
+                <Fact label="Docker" value={session.fingerprint.docker || "missing"} />
+                <Fact
+                  label="Tools"
+                  value={(session.fingerprint.tools || []).slice(0, 6).join(", ") || "—"}
+                />
+              </dl>
+            </div>
           ) : null}
         </section>
 
-        <aside className="flex flex-col gap-5">
-          <div className="border border-ink-700 bg-ink-900 p-5 text-sm text-slate-400">
+        <aside className="space-y-6">
+          <div className="panel p-6 text-sm text-ink-800 md:p-8">
             {agentOnline ? (
               <>
-                <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-moss">
-                  Laptop linked
-                </p>
-                <p className="mt-2">
-                  Checks run on your machine. Use <em className="text-paper">Stop agent</em> in the
-                  header when you&apos;re done — no need to touch the terminal.
+                <p className="section-label text-sea">Laptop linked</p>
+                <p className="mt-2 leading-relaxed text-ink-700">
+                  Checks run on your machine. Use <em className="font-medium text-ink-900">Stop agent</em>{" "}
+                  in the header when you&apos;re done.
                 </p>
                 {liveFingerprint ? (
-                  <dl className="mt-3 grid grid-cols-2 gap-2 font-mono text-[11px] text-slate-400">
+                  <dl className="mt-5 grid grid-cols-2 gap-4 border-t border-[#d0d7e0] pt-5 font-mono text-[12px]">
                     <div>
-                      <dt className="text-slate-600">Python</dt>
-                      <dd className="truncate text-paper">{liveFingerprint.python || "—"}</dd>
+                      <dt className="text-ink-600">Python</dt>
+                      <dd className="mt-0.5 truncate font-medium text-ink-900">
+                        {liveFingerprint.python || "—"}
+                      </dd>
                     </div>
                     <div>
-                      <dt className="text-slate-600">Node</dt>
-                      <dd className="truncate text-paper">{liveFingerprint.node || "—"}</dd>
+                      <dt className="text-ink-600">Node</dt>
+                      <dd className="mt-0.5 truncate font-medium text-ink-900">
+                        {liveFingerprint.node || "—"}
+                      </dd>
                     </div>
                     <div>
-                      <dt className="text-slate-600">git</dt>
-                      <dd className="truncate text-paper">{liveFingerprint.git || "—"}</dd>
+                      <dt className="text-ink-600">git</dt>
+                      <dd className="mt-0.5 truncate font-medium text-ink-900">
+                        {liveFingerprint.git || "—"}
+                      </dd>
                     </div>
                     <div>
-                      <dt className="text-slate-600">OS</dt>
-                      <dd className="truncate text-paper">
+                      <dt className="text-ink-600">OS</dt>
+                      <dd className="mt-0.5 truncate font-medium text-ink-900">
                         {liveFingerprint.os || "—"} {liveFingerprint.arch || ""}
                       </dd>
                     </div>
                   </dl>
                 ) : (
-                  <p className="mt-2 font-mono text-[11px] text-pollen">
-                    Waiting for PC tool report from agent…
+                  <p className="mt-3 font-mono text-[11px] font-medium text-pollen">
+                    Waiting for PC tool report…
                   </p>
                 )}
               </>
@@ -475,40 +521,44 @@ export default function App() {
               <AgentBootstrap
                 agentCodeInput={agentCodeInput}
                 setAgentCodeInput={setAgentCodeInput}
-                onCodeSaved={() => {
-                  /* probe effect depends on agentCodeInput */
-                }}
+                onCodeSaved={() => {}}
               />
             )}
             {agentPhase ? (
-              <p className="mt-3 font-mono text-xs text-pollen">{agentPhase}</p>
+              <p className="mt-4 font-mono text-xs font-medium text-pollen">{agentPhase}</p>
             ) : null}
           </div>
 
           {session?.crash_preview?.frames?.length ? (
-            <CrashTimeline preview={session.crash_preview} />
+            <div className="panel p-6 md:p-8">
+              <CrashTimeline preview={session.crash_preview} />
+            </div>
           ) : null}
 
           {session?.requirements && session?.fingerprint ? (
-            <CompatTable requirements={session.requirements} fingerprint={session.fingerprint} />
+            <div className="panel p-6 md:p-8">
+              <CompatTable requirements={session.requirements} fingerprint={session.fingerprint} />
+            </div>
           ) : null}
 
           {session?.requirements ? (
-            <div className="border border-ink-700 bg-ink-900 p-5">
-              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-slate-500">
+            <div className="panel p-6 md:p-8">
+              <p className="section-label">
                 Project needs
-                {session.requirements.inferred ? " · inferred from source" : ""}
+                {session.requirements.inferred ? " · inferred" : ""}
                 {session.requirements.notes?.some((n) => n.includes("RepoAnalystAgent"))
                   ? " · AI"
                   : ""}
               </p>
               {session.local_path ? (
-                <p className="mt-2 truncate font-mono text-xs text-moss">{session.local_path}</p>
+                <p className="mt-2 truncate font-mono text-xs font-medium text-sea">
+                  {session.local_path}
+                </p>
               ) : null}
-              <ul className="mt-3 space-y-1 font-mono text-xs text-slate-300">
+              <ul className="mt-4 space-y-2 font-mono text-xs text-ink-800">
                 <li>runtime {describeRuntime(session)}</li>
                 <li>install {session.requirements.install_command || "none"}</li>
-                <li>start {session.requirements.start_command || "none (not a bootable app)"}</li>
+                <li>start {session.requirements.start_command || "none"}</li>
                 {session.requirements.packages?.length ? (
                   <li>packages {session.requirements.packages.slice(0, 8).join(", ")}</li>
                 ) : null}
@@ -528,7 +578,7 @@ export default function App() {
           ) : null}
 
           {session?.score ? (
-            <div>
+            <div className="panel p-6 md:p-8">
               <BlockerList
                 key={`${session.session_id}-${session.score.percent}-${(session.score.blockers || [])
                   .map((b) => b.id)
@@ -541,9 +591,11 @@ export default function App() {
           ) : null}
 
           {session?.install?.diagnosis ? (
-            <div className="border border-rust bg-ink-900 p-5">
-              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-rust">Root cause</p>
-              <p className="mt-2 text-sm leading-relaxed text-paper">{session.install.diagnosis}</p>
+            <div className="panel border-l-4 border-l-rust p-6 md:p-8">
+              <p className="section-label text-rust">Root cause</p>
+              <p className="mt-2 text-sm leading-relaxed text-ink-900">
+                {session.install.diagnosis}
+              </p>
             </div>
           ) : null}
         </aside>
@@ -592,28 +644,28 @@ function AgentBootstrap({
 
   return (
     <>
-      <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-pollen">
-        Step 1 — link this laptop (agent code)
-      </p>
-      <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-slate-300">
+      <p className="section-label text-pollen">Step 1 — link this laptop</p>
+      <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-ink-600">
         <li>
-          Copy the PowerShell command below (uses your agent code{" "}
-          <span className="font-mono text-moss">{code || "……"}</span>)
+          Copy the PowerShell command (code{" "}
+          <span className="font-mono text-sea">{code || "……"}</span>)
         </li>
-        <li>Paste it in PowerShell and press Enter — leave that window open</li>
-        <li>Status flips to <em className="text-paper">laptop linked</em> automatically</li>
+        <li>Paste in PowerShell — leave that window open</li>
+        <li>
+          Status becomes <em className="text-ink-900">laptop linked</em>
+        </li>
       </ol>
 
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <label className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
-          Agent code
-        </label>
-        <input
-          value={agentCodeInput}
-          onChange={(e) => setAgentCodeInput(e.target.value.trim().toLowerCase())}
-          placeholder="click Generate"
-          className="w-36 border border-ink-700 bg-ink-950 px-3 py-2 font-mono text-sm text-paper outline-none focus:border-moss"
-        />
+      <div className="mt-5 flex flex-wrap items-end gap-3">
+        <div>
+          <label className="section-label">Agent code</label>
+          <input
+            value={agentCodeInput}
+            onChange={(e) => setAgentCodeInput(e.target.value.trim().toLowerCase())}
+            placeholder="generate"
+            className="field mt-1 w-36"
+          />
+        </div>
         <button
           type="button"
           onClick={() => {
@@ -622,7 +674,7 @@ function AgentBootstrap({
             saveAgentCode(next);
             onCodeSaved();
           }}
-          className="border border-ink-700 px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-slate-300 hover:text-paper"
+          className="btn-ghost py-2 text-xs"
         >
           Generate
         </button>
@@ -630,36 +682,26 @@ function AgentBootstrap({
           type="button"
           onClick={saveCode}
           disabled={agentCodeInput.length < 4}
-          className="border border-moss px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-moss disabled:opacity-40"
+          className="btn-ghost py-2 text-xs"
         >
           Use this code
         </button>
       </div>
 
-      <pre className="mt-3 overflow-x-auto border border-ink-700 bg-ink-950 p-3 font-mono text-[11px] leading-relaxed text-slate-300">
-        {command || "Generate or enter an agent code first"}
-      </pre>
-      <button
-        type="button"
-        onClick={copyCommand}
-        className="mt-3 bg-moss px-4 py-3 font-mono text-xs uppercase tracking-[0.16em] text-ink-950"
-      >
+      <pre className="code-block mt-4">{command || "Generate or enter an agent code first"}</pre>
+      <button type="button" onClick={copyCommand} className="btn-primary mt-3">
         {copied ? "Copied — paste in PowerShell" : "Copy PowerShell command"}
       </button>
-      <p className="mt-3 font-mono text-[10px] text-slate-500">
-        Prefer not to download .cmd files (Smart App Control often blocks them). Stop the agent
-        anytime with <span className="text-paper">Stop agent</span> in the top-right.
+      <p className="mt-3 font-mono text-[10px] text-ink-600">
+        Avoid .cmd downloads if Smart App Control blocks them. Stop anytime from the header.
       </p>
 
       <details className="mt-4">
-        <summary className="cursor-pointer font-mono text-[11px] text-slate-500">
-          Alternate: download connector .cmd (may be blocked)
+        <summary className="cursor-pointer font-mono text-[11px] text-ink-600">
+          Alternate: download connector .cmd
         </summary>
-        <a
-          href={downloadUrl}
-          className="mt-3 inline-block border border-ink-700 px-4 py-2 font-mono text-[11px] uppercase tracking-wider text-slate-300 hover:text-paper"
-        >
-          Download RepoReady-Connect.cmd
+        <a href={downloadUrl} className="mt-3 inline-block text-sm text-sea hover:underline">
+          Download Scout-Connect.cmd
         </a>
       </details>
     </>
@@ -681,8 +723,8 @@ function ModeTab({
       onClick={onClick}
       className={
         active
-          ? "border border-moss bg-ink-900 px-4 py-2 font-mono text-xs uppercase tracking-wider text-moss"
-          : "border border-ink-700 bg-ink-950 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500 hover:text-paper"
+          ? "-mb-px border-b-2 border-sea pb-3 font-display text-sm font-semibold text-sea"
+          : "pb-3 font-display text-sm font-semibold text-ink-600 hover:text-ink-900"
       }
     >
       {children}
@@ -692,9 +734,9 @@ function ModeTab({
 
 function Fact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="border border-ink-700 bg-ink-900 px-3 py-2">
-      <dt className="text-[10px] uppercase tracking-wider text-slate-500">{label}</dt>
-      <dd className="mt-1 truncate text-paper">{value}</dd>
+    <div>
+      <dt className="text-[10px] font-medium uppercase tracking-wider text-ink-600">{label}</dt>
+      <dd className="mt-1 truncate font-medium text-ink-900">{value}</dd>
     </div>
   );
 }

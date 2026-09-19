@@ -3,7 +3,12 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+  --bg: #f4f5f7;
+  --ink: #0f1419;
+  --mute: #3d4a57;
+  --sea: #0b6b63;
+  --line: #d0d7e0;
 }
 
 html,
@@ -14,11 +19,47 @@ body,
 
 body {
   margin: 0;
-  background: #07090f;
-  color: #eef2ea;
+  background: #f4f5f7;
+  color: var(--ink);
+  font-family: "Source Sans 3", system-ui, sans-serif;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
 }
 
 ::selection {
-  background: #7cffb2;
-  color: #07090f;
+  background: #99f6e4;
+  color: #0b0f14;
+}
+
+@layer components {
+  .panel {
+    @apply border border-[#d0d7e0] bg-white;
+  }
+
+  .hairline {
+    @apply border-b border-[#d0d7e0] bg-white;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center bg-sea px-5 py-3 font-display text-sm font-semibold tracking-wide text-white transition hover:bg-sea-bright disabled:opacity-40;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center border border-[#c5ced9] bg-white px-5 py-3 font-display text-sm font-semibold tracking-wide text-ink-900 transition hover:border-sea hover:text-sea disabled:opacity-40;
+  }
+
+  .field {
+    @apply w-full border border-[#c5ced9] bg-white px-3 py-3 font-mono text-sm text-ink-900 outline-none transition placeholder:text-ink-500 focus:border-sea focus:ring-2 focus:ring-sea/20;
+  }
+
+  .section-label {
+    @apply font-mono text-[11px] font-medium uppercase tracking-[0.18em] text-ink-600;
+  }
+
+  .code-block {
+    @apply overflow-x-auto border border-[#c5ced9] bg-[#0f1419] p-4 font-mono text-[12px] leading-relaxed text-[#e8eef4];
+  }
 }

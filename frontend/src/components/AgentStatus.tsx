@@ -8,14 +8,18 @@ export default function AgentStatus({ online, onStop, stopping }: AgentStatusPro
   const label =
     online === null ? "checking…" : online ? "laptop linked" : "laptop not linked";
   const color =
-    online === null ? "text-slate-500" : online ? "text-moss" : "text-pollen";
+    online === null ? "text-ink-400" : online ? "text-sea" : "text-pollen";
   const dot =
-    online === null ? "bg-slate-500" : online ? "bg-moss" : "bg-pollen";
+    online === null
+      ? "bg-ink-400"
+      : online
+        ? "bg-sea animate-pulse-dot"
+        : "bg-pollen";
 
   return (
     <div className="flex items-center gap-3">
       <div className={`flex items-center gap-2 font-mono text-xs ${color}`}>
-        <span className={`inline-block h-2 w-2 rounded-full ${dot}`} />
+        <span className={`inline-block h-2 w-2 ${dot}`} />
         {label}
       </div>
       {online && onStop ? (
@@ -23,7 +27,7 @@ export default function AgentStatus({ online, onStop, stopping }: AgentStatusPro
           type="button"
           onClick={onStop}
           disabled={stopping}
-          className="border border-ink-700 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-slate-400 hover:border-rust hover:text-rust disabled:opacity-40"
+          className="font-mono text-[10px] uppercase tracking-wider text-ink-400 underline-offset-2 hover:text-rust hover:underline disabled:opacity-40"
         >
           {stopping ? "Stopping…" : "Stop agent"}
         </button>

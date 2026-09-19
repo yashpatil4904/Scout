@@ -32,11 +32,11 @@ def _bootstrap_cmd(api: str, return_url: str) -> str:
     # Double-clickable Windows launcher: opens Amplify with ?code= and starts agent.
     return f"""@echo off
 setlocal EnableExtensions
-title RepoReady — laptop agent
+title Scout — laptop agent
 set "API={api}"
 set "RETURN={return_url}"
 echo.
-echo === RepoReady — connecting this laptop ===
+echo === Scout — connecting this laptop ===
 echo.
 where python >nul 2>&1
 if errorlevel 1 (
@@ -46,7 +46,7 @@ if errorlevel 1 (
 )
 for /f "usebackq delims=" %%i in (`python -c "import secrets; print(secrets.token_hex(4))"`) do set "CODE=%%i"
 echo Linked. Keep this window open.
-echo You can stop the agent anytime from the RepoReady website.
+echo You can stop the agent anytime from the Scout website.
 echo.
 start "" "%RETURN%?code=%CODE%"
 powershell -NoProfile -Command "Invoke-WebRequest -UseBasicParsing -Uri '%API%/agent.py' -OutFile ($env:TEMP + '\\setup_check.py')"
@@ -82,7 +82,7 @@ def handler(event, _context):
             "headers": {
                 "Access-Control-Allow-Origin": "*",
                 "Content-Type": "application/octet-stream",
-                "Content-Disposition": 'attachment; filename="RepoReady-Connect.cmd"',
+                "Content-Disposition": 'attachment; filename="Scout-Connect.cmd"',
             },
             "body": body,
         }

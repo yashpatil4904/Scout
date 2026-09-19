@@ -114,10 +114,10 @@ function buildRows(req: Requirements, fp: Fingerprint): Row[] {
 }
 
 const TONE: Record<Row["status"], string> = {
-  ok: "text-moss",
+  ok: "text-sea",
   gap: "text-rust",
   warn: "text-pollen",
-  na: "text-slate-500",
+  na: "text-ink-400",
 };
 
 const LABEL: Record<Row["status"], string> = {
@@ -140,41 +140,36 @@ export default function CompatTable({ requirements, fingerprint }: Props) {
     (!fingerprint?.os || fingerprint.os === "unknown");
   if (empty) {
     return (
-      <div className="border border-pollen bg-ink-900 p-5">
-        <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-pollen">
-          Your PC vs this repo
-        </p>
-        <p className="mt-2 text-sm text-slate-300">
-          No laptop fingerprint yet — the agent did not report what&apos;s installed on this PC.
-          Keep the agent window open and run the check again.
+      <div className="border-l-2 border-pollen pl-4">
+        <p className="section-label text-pollen">Your PC vs this repo</p>
+        <p className="mt-2 text-sm text-ink-600">
+          No laptop fingerprint yet — keep the agent window open and run the check again.
         </p>
       </div>
     );
   }
   const rows = buildRows(requirements, fingerprint);
   return (
-    <div className="border border-ink-700 bg-ink-900 p-5">
-      <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-slate-500">
-        Your PC vs this repo
-      </p>
-      <p className="mt-1 text-xs text-slate-400">
-        Software gaps first. Env vars are config — not something to install with winget.
+    <div>
+      <p className="section-label">Your PC vs this repo</p>
+      <p className="mt-2 text-sm text-ink-700">
+        Software gaps first. Env vars are config — not winget installs.
       </p>
       <div className="mt-4 overflow-x-auto">
         <table className="w-full border-collapse font-mono text-xs">
           <thead>
-            <tr className="border-b border-ink-700 text-left text-[10px] uppercase tracking-wider text-slate-500">
-              <th className="pb-2 pr-3 font-normal">Repo needs</th>
-              <th className="pb-2 pr-3 font-normal">This PC has</th>
-              <th className="pb-2 font-normal">Status</th>
+            <tr className="border-b border-[#d0d7e0] text-left text-[10px] uppercase tracking-wider text-ink-600">
+              <th className="pb-2 pr-3 font-medium">Repo needs</th>
+              <th className="pb-2 pr-3 font-medium">This PC has</th>
+              <th className="pb-2 font-medium">Status</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={`${r.need}-${r.have}`} className="border-b border-ink-800">
-                <td className="py-2 pr-3 text-slate-300">{r.need}</td>
-                <td className="py-2 pr-3 text-paper">{r.have}</td>
-                <td className={`py-2 font-medium ${TONE[r.status]}`}>{LABEL[r.status]}</td>
+              <tr key={`${r.need}-${r.have}`} className="border-b border-[#e8ecf1]">
+                <td className="py-2.5 pr-3 text-ink-700">{r.need}</td>
+                <td className="py-2.5 pr-3 font-medium text-ink-900">{r.have}</td>
+                <td className={`py-2.5 font-semibold ${TONE[r.status]}`}>{LABEL[r.status]}</td>
               </tr>
             ))}
           </tbody>

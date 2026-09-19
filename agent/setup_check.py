@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RepoReady laptop agent (AWS Ship It) — stdlib only.
+"""Scout laptop agent (AWS Ship It) — stdlib only.
 
 Runs on the DEVELOPER machine (never on Lambda):
   - Fingerprints OS / Python / Node / git / tools
@@ -675,7 +675,7 @@ def run_sidecar(*, port: int, default_api: str, agent_code: str = "") -> int:
     def poll_cloud() -> None:
         """Amplify cannot call localhost (Chrome loopback block). We poll the API instead."""
         print(f"\n{'=' * 56}")
-        print(f"  RepoReady laptop agent")
+        print(f"  Scout laptop agent")
         print(f"  AGENT CODE  →  {code}")
         print(f"  Leave this window open. Stop anytime from the website.")
         print(f"{'=' * 56}\n")
@@ -705,7 +705,7 @@ def run_sidecar(*, port: int, default_api: str, agent_code: str = "") -> int:
                     },
                 )
                 if isinstance(hb, dict) and hb.get("stop"):
-                    print("\n[agent] Stop requested from RepoReady UI — shutting down.")
+                    print("\n[agent] Stop requested from Scout UI — shutting down.")
                     stop.set()
                     srv = server_holder.get("server")
                     if srv is not None:
@@ -933,7 +933,7 @@ def run_sidecar(*, port: int, default_api: str, agent_code: str = "") -> int:
     threading.Thread(target=poll_cloud, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server_holder["server"] = server
-    print(f"RepoReady agent listening on http://127.0.0.1:{port}")
+    print(f"Scout agent listening on http://127.0.0.1:{port}")
     print(f"Cloud API: {default_api}")
     print("Stop from the website with “Stop laptop agent”, or press Ctrl+C here.")
     try:

@@ -4,10 +4,10 @@ type ScoreGaugeProps = {
 };
 
 function tone(percent: number | null) {
-  if (percent == null) return { stroke: "#3d4a5c", text: "text-slate-400" };
-  if (percent >= 90) return { stroke: "#7cffb2", text: "text-moss" };
-  if (percent >= 70) return { stroke: "#f5c44e", text: "text-pollen" };
-  return { stroke: "#ff6a4a", text: "text-rust" };
+  if (percent == null) return { stroke: "#c5ced9", text: "text-ink-400" };
+  if (percent >= 90) return { stroke: "#0f766e", text: "text-sea" };
+  if (percent >= 70) return { stroke: "#c47f0a", text: "text-pollen" };
+  return { stroke: "#dc4a3d", text: "text-rust" };
 }
 
 export default function ScoreGauge({ percent, label }: ScoreGaugeProps) {
@@ -18,24 +18,17 @@ export default function ScoreGauge({ percent, label }: ScoreGaugeProps) {
   const colors = tone(percent);
 
   return (
-    <div className="flex flex-col items-center">
+    <div className="flex flex-col items-center lg:items-start">
       <div className="relative">
-        <svg width="240" height="240" viewBox="0 0 240 240" aria-label={label}>
-          <circle
-            cx="120"
-            cy="120"
-            r={r}
-            fill="none"
-            stroke="#1c2433"
-            strokeWidth="14"
-          />
+        <svg width="220" height="220" viewBox="0 0 240 240" aria-label={label}>
+          <circle cx="120" cy="120" r={r} fill="none" stroke="#dde3eb" strokeWidth="12" />
           <circle
             cx="120"
             cy="120"
             r={r}
             fill="none"
             stroke={colors.stroke}
-            strokeWidth="14"
+            strokeWidth="12"
             strokeLinecap="round"
             strokeDasharray={c}
             strokeDashoffset={offset}
@@ -44,15 +37,15 @@ export default function ScoreGauge({ percent, label }: ScoreGaugeProps) {
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <div className={`font-display text-7xl leading-none tracking-tight ${colors.text}`}>
+          <div className={`font-display text-6xl font-bold leading-none tracking-tight ${colors.text}`}>
             {percent == null ? "—" : percent}
           </div>
-          <div className="mt-1 font-mono text-xs uppercase tracking-[0.22em] text-slate-500">
+          <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.22em] text-ink-400">
             {percent == null ? "waiting" : "% ready"}
           </div>
         </div>
       </div>
-      <p className="mt-5 max-w-md text-center font-display text-xl leading-snug text-paper">
+      <p className="mt-4 max-w-md text-center font-sans text-base leading-snug text-ink-800 lg:text-left">
         {label}
       </p>
     </div>
