@@ -1,3 +1,5 @@
+# RepoReady (AWS Ship It) — Amplify Hosting build
+# Env (Git builds): VITE_API_URL=<Api Gateway URL>  VITE_AGENT_URL=http://127.0.0.1:9877
 version: 1
 frontend:
   phases:
@@ -19,6 +21,3 @@ frontend:
       headers:
         - key: "Cache-Control"
           value: "public,max-age=0,must-revalidate"
-# Set Amplify env before Git builds:
-#   VITE_API_URL = https://xxxx.execute-api.us-east-1.amazonaws.com
-#   VITE_AGENT_URL = http://127.0.0.1:9877

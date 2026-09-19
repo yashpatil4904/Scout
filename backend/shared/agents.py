@@ -1,3 +1,12 @@
+"""RepoReady LLM agents (AWS Ship It).
+
+Runs inside Lambda (not on the laptop):
+  - RepoAnalystAgent — what SOFTWARE the repo needs
+  - ScoreAgent — compare laptop fingerprint vs requirements → % ready
+  - BlockerAuditorAgent — drop false-positive blockers
+
+Provider: Groq in production deploy; Bedrock path kept for accounts with access.
+"""
 from __future__ import annotations
 
 import json

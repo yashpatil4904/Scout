@@ -1,7 +1,8 @@
 {
-  "name": "setup-readiness-frontend",
+  "name": "repoready-frontend",
   "private": true,
   "version": "0.1.0",
+  "description": "RepoReady — AWS Ship It: will this repo run on your laptop?",
   "type": "module",
   "scripts": {
     "dev": "vite",

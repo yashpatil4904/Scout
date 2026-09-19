@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Setup Readiness Checker — local agent (stdlib only).
+"""RepoReady laptop agent (AWS Ship It) — stdlib only.
 
-Fingerprints THIS machine, clones the repo into a temp sandbox, installs
-without touching global site-packages, optionally boots the app, then POSTs
-JSON to the cloud API. Never uploads source files.
+Runs on the DEVELOPER machine (never on Lambda):
+  - Fingerprints OS / Python / Node / git / tools
+  - Polls API Gateway with an agent code (Amplify HTTPS cannot call loopback)
+  - Posts results for ScoreAgent; installs/boot only after UI approval
+
+Served to users as GET {ApiBaseUrl}/agent.py
 """
 from __future__ import annotations
 

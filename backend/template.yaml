@@ -1,6 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Setup Readiness Checker — Lambda, HTTP API, DynamoDB, Groq LLM (Bedrock optional), Amplify frontend
+Description: >
+  RepoReady (AWS Ship It) — serverless setup-readiness checker.
+  Stack: Lambda + API Gateway HTTP API + DynamoDB + Amplify Hosting + CloudWatch.
+  LLM agents (RepoAnalyst, ScoreAgent) via Groq; Bedrock optional.
+  Local laptop agent fingerprints the developer PC; cloud never pretends to be the laptop.
 
 Globals:
   Function:

@@ -1,203 +1,270 @@
-# Setup Readiness Checker
+# RepoReady
 
-One number for “can I run this project on **my** laptop?” — not a generic CI box, and not the AWS host.
+### Will this repo run on *your* laptop — before you waste hours finding out?
 
-Amazon Bedrock agents read the GitHub or local source, then **ScoreAgent** compares that to **this PC’s** fingerprint and writes the % ready number plus the missing/mismatch list.
+**AWS Ship It hackathon · Track: Ship It (deployed on AWS)**  
+**Live app:** [https://main.d3qwc7ge49pla9.amplifyapp.com](https://main.d3qwc7ge49pla9.amplifyapp.com)  
+**API:** [https://7j9hs02vo4.execute-api.us-east-1.amazonaws.com](https://7j9hs02vo4.execute-api.us-east-1.amazonaws.com) · `GET /health`
 
-## Amazon Bedrock setup (required for LLM scoring)
+> Students, hackathon teammates, and juniors constantly lose evenings to “dependency hell”: wrong Python, missing Node, never-pushed `node_modules`, silent env crashes. CI and Dev Containers assume scaffolding already exists. **RepoReady gives one readiness score for *this PC* vs *this project*, plus an ordered future-crash timeline — and never installs anything until you approve.**
 
-The laptop agent only measures your PC. Bedrock runs in the API (`dev_server.py` or Lambda) and produces the score + blockers.
+---
 
-### 1. AWS account and CLI
+## Judge cheat-sheet (maps 1:1 to Ship It rubric)
 
-1. Create/sign in at https://aws.amazon.com/
-2. Install AWS CLI v2: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
-3. Create an IAM user (or use the hackathon account) with `AmazonBedrockFullAccess` (or at least `bedrock:InvokeModel` on `*`).
-4. Create an access key, then in PowerShell:
+| Rubric | How RepoReady scores |
+| --- | --- |
+| **01 · Idea & Impact** | Real, daily developer pain: setup before first `npm start` / `python app.py`. Changes the outcome from “Google errors for 3 hours” → “install these 2 things, then boot.” |
+| **02 · Built on AWS (Ship It)** | **Lambda · API Gateway · DynamoDB · Amplify Hosting · SAM · CloudWatch**. LLM agents in the API path. Free-tier friendly serverless. |
+| **03 · Learning** | First full SAM deploy, Amplify hosting, Chrome Private Network Access / loopback constraints, agent-code cloud poll pattern, Groq as Bedrock fallback. |
+| **04 · Execution** | Working end-to-end: paste GitHub URL or local path → laptop fingerprint → % ready + crash timeline + approve-to-install. |
+| **05 · Demo video** | See [`DEMO.md`](DEMO.md) — 3-minute script: problem → live URL → agent link → score → AWS map. |
 
-```powershell
-aws configure
+**One feature that runs:** cloud analysis + local fingerprint → single readiness % and install list.
+
+---
+
+## The problem (why this exists)
+
+| What people try | Why it fails them |
+| --- | --- |
+| README / “works on my machine” | Written for the author’s laptop, not yours |
+| CI green | Tests a clean Linux image — not your Windows PATH |
+| AI “fix my deps” chatbots | Guess from text; never measure *your* installed runtimes |
+| Dev Containers / Docker-first | Heavy; many student repos have no Dockerfile |
+| Cloning + `npm install` blind | Failures appear late; `node_modules` was never in Git |
+
+**RepoReady’s bet:** separate **what the repo needs** (cloud) from **what this laptop has** (local agent). Compare them. Show the first crash you’ll hit if you run it *now*.
+
+---
+
+## What you get (working product)
+
+1. **One readiness %** — PC vs repo, not vs AWS Lambda  
+2. **Compat table** — Python/Node/git/services: repo needs ↔ this PC has  
+3. **Future-crash preview** — ordered failures (runtime → install → env → boot)  
+4. **Approve-to-install** — fingerprint first; installs only after UI confirmation  
+5. **Two modes** — public **GitHub URL** or **local folder** on disk  
+6. **Laptop link via agent code** — works from Amplify HTTPS (Chrome blocks loopback)
+
+---
+
+## Architecture (Ship It)
+
+```mermaid
+flowchart LR
+  subgraph User["Developer laptop"]
+    UI["Amplify SPA\nRepoReady UI"]
+    AG["Local agent\nsetup_check.py serve"]
+  end
+
+  subgraph AWS["AWS us-east-1 — Ship It stack"]
+    APIGW["API Gateway\nHTTP API"]
+    L["Lambdas\nanalyze · ingest · bridge · …"]
+    DDB["DynamoDB\nsessions + heartbeats"]
+    AMP["Amplify Hosting"]
+    CW["CloudWatch Logs"]
+    LLM["LLM ScoreAgent /\nRepoAnalyst\nGroq · Bedrock-ready"]
+  end
+
+  GH["GitHub API\npublic repos"]
+
+  AMP --> UI
+  UI -->|HTTPS sessions / agent status| APIGW
+  AG -->|heartbeat · pending · results| APIGW
+  APIGW --> L
+  L --> DDB
+  L --> LLM
+  L --> GH
+  L --> CW
 ```
 
-Use region **`us-east-1`** (Nova Lite is available there). Paste Access Key ID and Secret.
+### Why a local agent? (design constraint, not a shortcut)
 
-### 2. Turn on the model in Bedrock
+Browsers on **Amplify HTTPS cannot call `http://127.0.0.1`** (Private Network Access / loopback). So the laptop agent **polls the cloud** with a short **agent code**. The UI and agent share that code; AWS never pretends to be your PC.
 
-1. Open https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/modelaccess
-2. Click **Modify model access**
-3. Enable **Amazon Nova Lite** (`amazon.nova-lite-v1:0`) — or Claude if you prefer
-4. Wait until status is **Access granted**
+```mermaid
+sequenceDiagram
+  participant U as Browser (Amplify)
+  participant A as API Gateway + Lambda
+  participant D as DynamoDB
+  participant L as Laptop agent
+  participant G as GitHub / Groq
 
-### 3. Prove it from this repo
+  U->>U: Generate agent code · save locally
+  L->>A: POST /agent/heartbeat (+ live fingerprint)
+  A->>D: Store heartbeat
+  U->>A: GET /agent/status?code=
+  A-->>U: online + Python/Node/git
 
-```powershell
-cd C:\Users\Yash\Desktop\repo-checker
-$env:AWS_REGION="us-east-1"
-$env:BEDROCK_MODEL_ID="amazon.nova-lite-v1:0"
-Remove-Item Env:BEDROCK_DISABLED -ErrorAction SilentlyContinue
-python backend/check_bedrock.py
+  U->>A: POST /sessions (GitHub URL + code)
+  A->>G: Fetch manifests / infer needs
+  A->>D: status=awaiting_agent
+
+  L->>A: GET /agent/pending?code=
+  L->>L: Fingerprint THIS PC
+  L->>A: POST /sessions/{id}/results
+  A->>G: ScoreAgent (PC ↔ repo)
+  A->>D: status=complete + score + crash_preview
+  U->>A: GET /sessions/{id}
+  A-->>U: % ready · blockers · timeline
 ```
 
-You should see `ok Bedrock responded`. If it fails, `/health` and the script print the AWS error (AccessDenied, model not enabled, wrong region).
+---
 
-### 4. Restart the local API **with** Bedrock (do not set BEDROCK_DISABLED)
+## AWS services used (Ship It mandatory map)
 
-Stop the old `python backend/dev_server.py` window, then:
+| Ship It category | Service | Role in RepoReady |
+| --- | --- | --- |
+| **Serverless** | **AWS Lambda** | Analyze repo, ingest fingerprint, agent bridge, health |
+| **Serverless** | **API Gateway** (HTTP API) | Public HTTPS API for UI + agent |
+| **Serverless** | **SAM** (`backend/template.yaml`) | IaC build & deploy |
+| **Data** | **DynamoDB** | Sessions + agent heartbeats |
+| **Hosting** | **Amplify Hosting** | SPA at a public URL |
+| **Plumbing** | **CloudWatch Logs** | Per-function observability (SAM default) |
+| **Agents & AI** | **LLM agents in Lambda** | RepoAnalyst + ScoreAgent + BlockerAuditor (+ DiagnoseAgent). **Groq** in this deploy (`BEDROCK_DISABLED=1`); **Bedrock** path remains in code for accounts with model access |
+| **Open source / local** | **SAM CLI**, Python agent | Local Build It path via `backend/dev_server.py` |
+
+**Cost posture:** pay-per-request DynamoDB + Lambda + Amplify free tier–friendly. No always-on EC2. LLM calls only when a session is scored.
+
+---
+
+## Live demo (60 seconds)
+
+1. Open **[RepoReady](https://main.d3qwc7ge49pla9.amplifyapp.com)** (hard-refresh if needed).  
+2. **Copy PowerShell command** → run in a terminal → leave window open.  
+3. Wait until UI shows **laptop linked** and your real Python / Node / git.  
+4. Paste a public repo (e.g. `https://github.com/pallets/flask`) → **Check my laptop**.  
+5. Read **% ready**, **compat table**, **future-crash preview**.  
+6. Optional: **Stop agent** from the UI when done.
+
+Health check:
 
 ```powershell
-cd C:\Users\Yash\Desktop\repo-checker
-$env:AWS_REGION="us-east-1"
-$env:BEDROCK_MODEL_ID="amazon.nova-lite-v1:0"
-$env:AGENT_PORT="9877"
-$env:AUTO_START_AGENT="0"
-python backend/dev_server.py
+curl https://7j9hs02vo4.execute-api.us-east-1.amazonaws.com/health
 ```
 
-The log must say `bedrock=on`. UI header should switch from **heuristic scoring** to **Bedrock scoring on**.
+Expect `llm.enabled: true` and provider `groq` (or bedrock when enabled).
 
-Then check a GitHub URL or local folder as usual. ScoreAgent uses your fingerprint vs the repo and lists what this PC is missing.
+---
 
-## Two ways to check
+## Learning (what we didn’t know on day one)
 
-### 1. GitHub URL (dashboard)
+Explicit Ship It “Learning” criteria:
 
-Paste a public repo URL. The UI analyzes it, then **automatically** asks the local agent on your laptop to fingerprint, install (sandbox), and boot. You do **not** paste `irm ... | python ...`.
+1. **SAM → Lambda + HTTP API + DynamoDB** end-to-end deploy (`sam build` / `sam deploy`).  
+2. **Amplify Hosting** for a Vite SPA with baked-in `VITE_API_URL`.  
+3. **Browser security reality:** HTTPS pages cannot fingerprint a laptop via loopback — designed **agent-code polling** instead.  
+4. **Multi-agent LLM pipeline** (analyst → score → audit) with heuristic baseline so empty LLM replies don’t brick the product.  
+5. **Groq as production LLM** when Bedrock model access wasn’t available; Bedrock wiring kept for portability.  
+6. **Windows tooling quirks:** Store `python` stubs, `py -3`, PATH refresh, Smart App Control blocking `.cmd` downloads → PowerShell + agent code as primary link path.
 
-### 2. Local folder (dashboard or CLI)
+---
 
-Check the folder you are already working in:
+## Repository layout
 
-- **UI:** switch to **Local folder**, paste an absolute path (e.g. `C:\Users\you\Desktop\my-app`)
-- **CLI:** `python agent/setup_check.py --path "C:\Users\you\Desktop\my-app" --api http://127.0.0.1:8787`
-
-## Installs require your OK
-
-The first pass only **fingerprints** your machine (OS, Python, Node, RAM, etc.). It does **not** install missing tools or project dependencies.
-
-Each blocker in the UI has **Install** / **Skip**. Nothing runs until you click **Yes, install** for that item (sandboxed pip/npm, winget/brew for git/node/python, docker run for Redis/Postgres, etc.).
-
-## Local demo
-
-From the repo root:
-
-```powershell
-python -m pip install -r backend/requirements.txt
-python backend/dev_server.py
+```text
+repo-checker/
+├── README.md                 ← you are here (Ship It narrative)
+├── DEMO.md                   ← 3-minute judge video script
+├── amplify.yml               ← Amplify build
+├── frontend/                 ← React + Vite + Tailwind → Amplify
+├── backend/
+│   ├── template.yaml         ← SAM: Lambda + API Gateway + DynamoDB
+│   ├── deploy.ps1            ← one-shot deploy (Groq key from .env)
+│   ├── lambdas/              ← thin handlers
+│   └── shared/
+│       ├── agents.py         ← RepoAnalyst · ScoreAgent · Auditor
+│       ├── crash_preview.py  ← future-crash timeline
+│       ├── service.py        ← session lifecycle
+│       └── store.py          ← DynamoDB / local file store
+└── agent/
+    └── setup_check.py        ← laptop agent (also served as /agent.py)
 ```
 
-That starts the API on `:8787` **and** auto-starts the local agent sidecar (default `:9876`). With Bedrock env vars set (section above), scoring uses the LLM.
+---
 
-Second terminal:
+## Local development (Build It–compatible)
 
 ```powershell
+# API + optional local scoring
+cd backend
+pip install -r requirements.txt
+# Optional: set GROQ_API_KEY in repo-root .env
+python dev_server.py
+```
+
+```powershell
+# UI
 cd frontend
 npm install
+$env:VITE_API_URL="http://127.0.0.1:8787"
 npm run dev
 ```
 
-Open the Vite URL (usually [http://127.0.0.1:5173](http://127.0.0.1:5173)). When the header says **agent online**, click **Check setup** — the score fills in by itself.
-
-If the agent is offline (e.g. Amplify frontend talking to AWS API), start it once on your laptop:
-
 ```powershell
-python agent/setup_check.py serve --api https://YOUR_API_URL
+# Laptop agent (if not auto-started)
+python agent/setup_check.py serve --api http://127.0.0.1:8787 --code <your-code>
 ```
 
-## What each folder does
+---
 
-| Path | Role |
-| --- | --- |
-| `frontend/` | React + Tailwind dashboard (Amplify Hosting) |
-| `backend/dev_server.py` | Local FastAPI + auto-starts agent sidecar |
-| `backend/lambdas/` | AWS Lambda entrypoints |
-| `backend/shared/agents.py` | Bedrock RepoAnalyst + **ScoreAgent** (PC gaps) + auditor |
-| `backend/shared/diagnose.py` | Bedrock DiagnoseAgent on install logs |
-| `backend/template.yaml` | SAM: HTTP API + DynamoDB + Lambdas + Bedrock IAM |
-| `agent/setup_check.py` | Local agent: `serve`, session check, `--path` |
+## Deploy to AWS (Ship It)
 
-## Hackathon AWS map (Ship It)
-
-| Track | What this project uses |
-| --- | --- |
-| Agents and AI | **Groq** LLM for RepoAnalyst + ScoreAgent + crash preview (Bedrock stays wired; this account uses `BEDROCK_DISABLED=1`) |
-| Serverless | Lambda + API Gateway HTTP API (SAM `backend/template.yaml`) |
-| Data | DynamoDB session store |
-| Hosting | Amplify Hosting (`amplify.yml`) |
-| Observability | CloudWatch logs from each Lambda (SAM default) |
-
-The Lambda **never** fingerprints itself. Only the local agent reports OS / runtimes / install / boot.
-
-## AWS deploy
-
-### 0. IAM (one-time)
-
-Your IAM user needs CloudFormation + Lambda + API Gateway + DynamoDB + S3 + IAM role creation.
-
-In AWS Console → IAM → Users → `yashpatil` → Add permissions → attach **AdministratorAccess** (hackathon)  
-or create a policy from `backend/iam-sam-deploy-policy.json` and attach it.
-
-Also install: AWS CLI (done), SAM CLI (`winget install Amazon.SAM-CLI`), Python 3.12 (`py install 3.12`).
-
-### 1. Backend (Lambda + API Gateway + DynamoDB)
+### Backend
 
 ```powershell
-# Put GROQ_API_KEY in repo-root .env first
+# Repo root .env must contain: GROQ_API_KEY=...
 cd backend
 .\deploy.ps1
 ```
 
-Or manually:
+Stack name: `setup-readiness` · Region: `us-east-1` · Output: **ApiBaseUrl**
 
-```powershell
-cd backend
-sam build
-sam deploy --guided
-# Parameters: BedrockDisabled=1, paste GroqApiKey, GroqModel=openai/gpt-oss-20b
-```
+### Frontend
 
-Note the stack output **ApiBaseUrl**.
-
-### 2. Frontend (Amplify)
-
-1. AWS Console → Amplify → Create new app → Host web app → connect this GitHub repo (or drag-drop `frontend/dist`).
-2. Build settings use root `amplify.yml`.
-3. Environment variables:
-   - `VITE_API_URL` = ApiBaseUrl from SAM
-   - `VITE_AGENT_URL` = `http://127.0.0.1:9877`
-4. Save and redeploy (Vite bakes these in at build time).
-
-Manual preview without Amplify:
+Build with API URL baked in, deploy `frontend/dist` to Amplify (or Git-connected app using `amplify.yml`):
 
 ```powershell
 cd frontend
 $env:VITE_API_URL="https://YOUR_API.execute-api.us-east-1.amazonaws.com"
-$env:VITE_AGENT_URL="http://127.0.0.1:9877"
-npm.cmd run build
-npm.cmd run preview
+npm run build
 ```
 
-### 3. Laptop agent (required for fingerprinting)
+Set Amplify env for Git builds: `VITE_API_URL`, `VITE_AGENT_URL=http://127.0.0.1:9877`.
 
-```powershell
-python agent/setup_check.py serve --api https://YOUR_API.execute-api.us-east-1.amazonaws.com
-# default agent port should be 9877 to match the UI
-```
+---
 
-### 4. Smoke test
+## Safety model
 
-```powershell
-curl https://YOUR_API.execute-api.us-east-1.amazonaws.com/health
-# expect llm.enabled true, provider groq
-```
+| Action | Default |
+| --- | --- |
+| Fingerprint OS / Python / Node / git | Automatic once agent linked |
+| `npm install` / `pip install` / winget | **Only after UI Approve** |
+| Boot / health check | **Only after UI Approve** |
+| Cloud sees local source | Manifests/snippets only (local mode), not full drive |
 
-## Scoring
+---
+
+## Scoring signals (product, not hackathon)
 
 | Signal | Weight | Notes |
 | --- | --- | --- |
-| Runtime match | 50 | Python/Node version vs this laptop (Node major is a minimum) |
-| Tooling | 25 | git, pip/npm — Node present counts as npm on Windows |
-| Env / services | 10 | collapsed into one config card when possible |
-| Sandbox install | 8 | optional until you approve |
-| Boot check | 7 | only when the repo has a real start command |
+| Runtime match | ~50% | Python/Node vs this laptop |
+| Tooling | ~25% | git, pip/npm |
+| Env / services | ~10% | collapsed config cards |
+| Install / boot proof | ~15% | optional until approved |
 
-Fingerprint-only never claims fully ready. Use **Future-crash preview** for the ordered failure chain on this PC.
+GitHub clones do **not** spam missing `node_modules` packages (those folders are never pushed). Local folders still surface missing deps.
+
+---
+
+## Team / submission one-liner
+
+**RepoReady is an AWS-shipped readiness checker:** serverless analysis on Lambda + DynamoDB, hosted on Amplify, with a local laptop agent and LLM ScoreAgent so students know what to install *before* the first crash — not after.
+
+---
+
+## License / notes
+
+Hackathon prototype. Do not commit `.env` or API keys. Groq key is injected at deploy via SAM parameter `GroqApiKey` (`NoEcho`).
