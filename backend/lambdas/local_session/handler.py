@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
 
 from shared.http_util import parse_body, response  # noqa: E402
 from shared.models import to_dict  # noqa: E402
-from shared.service import create_local_session  # noqa: E402
+from shared.service import api_base_from_event, create_local_session  # noqa: E402
 
 
 def handler(event, _context):
@@ -25,6 +25,8 @@ def handler(event, _context):
             local_path,
             files=body.get("files") or {},
             tree_paths=body.get("tree_paths") or body.get("treePaths"),
+            api_base=api_base_from_event(event),
+            agent_code=(body.get("agent_code") or body.get("agentCode") or "").strip() or None,
         )
     except ValueError as exc:
         return response(400, {"error": str(exc)})

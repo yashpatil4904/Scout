@@ -17,10 +17,13 @@ if str(ROOT) not in sys.path:
 
 from shared.models import to_dict  # noqa: E402
 from shared.service import (  # noqa: E402
+    agent_heartbeat,
+    agent_status,
     create_local_session,
     create_session,
     get_session,
     ingest_results,
+    list_pending_sessions,
     public_api_base,
 )
 
@@ -40,12 +43,20 @@ app.add_middleware(
 class CreateSessionBody(BaseModel):
     repoUrl: str | None = None
     repo_url: str | None = None
+    agent_code: str | None = None
+    agentCode: str | None = None
 
 
 class CreateLocalSessionBody(BaseModel):
     local_path: str
     files: dict[str, str] | None = None
     tree_paths: list[str] | None = None
+    agent_code: str | None = None
+    agentCode: str | None = None
+
+
+class AgentHeartbeatBody(BaseModel):
+    code: str
 
 
 class IngestBody(BaseModel):
@@ -93,10 +104,11 @@ def post_session(body: CreateSessionBody) -> JSONResponse:
     repo_url = (body.repoUrl or body.repo_url or "").strip()
     if not repo_url:
         raise HTTPException(status_code=400, detail="repoUrl is required")
-    session = create_session(repo_url)
+    code = (body.agent_code or body.agentCode or "").strip() or None
+    session = create_session(repo_url, agent_code=code)
     status = 201 if session.status != "error" else 400
-    # Kick the local agent so the UI never needs a manual paste.
-    if session.status == "awaiting_agent":
+    # Local-only: kick sidecar on same machine. Amplify uses agent poll instead.
+    if session.status == "awaiting_agent" and not code:
         _try_trigger_agent(session.session_id)
     return JSONResponse(to_dict(session), status_code=status)
 
@@ -108,11 +120,30 @@ def post_local_session(body: CreateLocalSessionBody) -> JSONResponse:
             body.local_path,
             files=body.files,
             tree_paths=body.tree_paths,
+            agent_code=(body.agent_code or body.agentCode or "").strip() or None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     status = 201 if session.status != "error" else 400
     return JSONResponse(to_dict(session), status_code=status)
+
+
+@app.get("/agent/pending")
+def agent_pending(code: str = "") -> dict:
+    return {"ok": True, "sessions": list_pending_sessions(code)}
+
+
+@app.get("/agent/status")
+def agent_status_route(code: str = "") -> dict:
+    return agent_status(code)
+
+
+@app.post("/agent/heartbeat")
+def agent_heartbeat_route(body: AgentHeartbeatBody) -> dict:
+    try:
+        return agent_heartbeat(body.code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/sessions/{session_id}")

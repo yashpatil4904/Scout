@@ -167,6 +167,7 @@ class Session:
     created_at: str | None = None
     updated_at: str | None = None
     error: str | None = None
+    agent_code: str | None = None
     # Ephemeral analysis cache (snippets) — may be persisted in local store
     analysis_snippets: dict | None = None
 
@@ -209,5 +210,6 @@ class Session:
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
             error=data.get("error"),
+            agent_code=data.get("agent_code"),
             analysis_snippets=data.get("analysis_snippets"),
         )

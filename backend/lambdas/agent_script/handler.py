@@ -8,7 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.http_util import CORS_HEADERS  # noqa: E402
-from shared.service import public_api_base  # noqa: E402
+from shared.service import api_base_from_event, public_api_base  # noqa: E402
 
 
 def _agent_path() -> Path:
@@ -34,7 +34,7 @@ def handler(event, _context):
         }
     path = _agent_path()
     text = path.read_text(encoding="utf-8")
-    api = public_api_base()
+    api = api_base_from_event(event) or public_api_base()
     text = text.replace("__DEFAULT_API__", api)
     return {
         "statusCode": 200,

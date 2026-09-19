@@ -11,7 +11,8 @@ Globals:
     Environment:
       Variables:
         SESSIONS_TABLE: !Ref SessionsTable
-        PUBLIC_API_BASE: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+        # Do NOT reference HttpApi here — that creates a circular dependency with Lambda↔API permissions.
+        # Lambdas derive the public URL from the request Host / requestContext.domainName.
         BEDROCK_MODEL_ID: !Ref BedrockModelId
         BEDROCK_DISABLED: !Ref BedrockDisabled
         GROQ_API_KEY: !Ref GroqApiKey
@@ -199,6 +200,63 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /health
             Method: GET
+    Metadata:
+      BuildMethod: python3.12
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
+
+  AgentBridgeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas.agent_bridge.handler.handler
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SessionsTable
+      Events:
+        AgentPending:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /agent/pending
+            Method: GET
+        AgentStatus:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /agent/status
+            Method: GET
+        AgentHeartbeat:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /agent/heartbeat
+            Method: POST
+        AgentStop:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /agent/stop
+            Method: POST
+        AgentConnectCmd:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /agent/connect.cmd
+            Method: GET
+        LocalIntent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /sessions/local-intent
+            Method: POST
+        HydrateLocal:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /sessions/{id}/hydrate
+            Method: POST
     Metadata:
       BuildMethod: python3.12
       BuildProperties:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -12,6 +13,10 @@ class SessionStore(Protocol):
     def put(self, session: Session) -> None: ...
     def get(self, session_id: str) -> Session | None: ...
     def update(self, session: Session) -> None: ...
+    def list_pending_for_agent(self, agent_code: str) -> list[Session]: ...
+    def put_agent_heartbeat(self, agent_code: str, *, stop: bool | None = None) -> None: ...
+    def request_agent_stop(self, agent_code: str) -> None: ...
+    def get_agent_heartbeat(self, agent_code: str) -> dict | None: ...
 
 
 class FileStore:
@@ -20,6 +25,7 @@ class FileStore:
     def __init__(self, path: str | None = None) -> None:
         default = Path(__file__).resolve().parent.parent / ".sessions.json"
         self.path = Path(path or os.environ.get("SESSION_FILE", str(default)))
+        self.agents_path = self.path.with_name(".agents.json")
 
     def _load(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -47,6 +53,59 @@ class FileStore:
     def update(self, session: Session) -> None:
         self.put(session)
 
+    def list_pending_for_agent(self, agent_code: str) -> list[Session]:
+        code = (agent_code or "").strip().lower()
+        if not code:
+            return []
+        out: list[Session] = []
+        for raw in self._load().values():
+            if not isinstance(raw, dict):
+                continue
+            if (raw.get("agent_code") or "").strip().lower() != code:
+                continue
+            if raw.get("status") != "awaiting_agent":
+                continue
+            sess = Session.from_dict(raw)
+            if sess:
+                out.append(sess)
+        return out
+
+    def put_agent_heartbeat(self, agent_code: str, *, stop: bool | None = None) -> None:
+        code = (agent_code or "").strip().lower()
+        if not code:
+            return
+        data = {}
+        if self.agents_path.exists():
+            try:
+                data = json.loads(self.agents_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                data = {}
+        prev = data.get(code) if isinstance(data.get(code), dict) else {}
+        row = {
+            "code": code,
+            "last_seen": time.time(),
+            "ok": True,
+            "stop": bool(prev.get("stop")) if stop is None else bool(stop),
+        }
+        if stop is False:
+            row["stop"] = False
+        data[code] = row
+        self.agents_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def request_agent_stop(self, agent_code: str) -> None:
+        self.put_agent_heartbeat(agent_code, stop=True)
+
+    def get_agent_heartbeat(self, agent_code: str) -> dict | None:
+        code = (agent_code or "").strip().lower()
+        if not code or not self.agents_path.exists():
+            return None
+        try:
+            data = json.loads(self.agents_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        row = data.get(code)
+        return row if isinstance(row, dict) else None
+
 
 class DynamoStore:
     def __init__(self, table_name: str | None = None) -> None:
@@ -70,6 +129,57 @@ class DynamoStore:
 
     def update(self, session: Session) -> None:
         self.put(session)
+
+    def list_pending_for_agent(self, agent_code: str) -> list[Session]:
+        code = (agent_code or "").strip().lower()
+        if not code:
+            return []
+        # Low-volume hackathon scan — fine for Ship It demos.
+        resp = self.table.scan(
+            FilterExpression="agent_code = :c AND #s = :st",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":c": code, ":st": "awaiting_agent"},
+        )
+        out: list[Session] = []
+        for item in resp.get("Items") or []:
+            item = dict(item)
+            item.pop("sessionId", None)
+            sess = Session.from_dict(_from_dynamo(item))
+            if sess:
+                out.append(sess)
+        return out
+
+    def put_agent_heartbeat(self, agent_code: str, *, stop: bool | None = None) -> None:
+        code = (agent_code or "").strip().lower()
+        if not code:
+            return
+        prev = self.get_agent_heartbeat(code) or {}
+        stop_flag = bool(prev.get("stop")) if stop is None else bool(stop)
+        if stop is False:
+            stop_flag = False
+        self.table.put_item(
+            Item={
+                "sessionId": f"_agent_{code}",
+                "kind": "agent_heartbeat",
+                "agent_code": code,
+                "last_seen": _to_dynamo(time.time()),
+                "ok": True,
+                "stop": stop_flag,
+            }
+        )
+
+    def request_agent_stop(self, agent_code: str) -> None:
+        self.put_agent_heartbeat(agent_code, stop=True)
+
+    def get_agent_heartbeat(self, agent_code: str) -> dict | None:
+        code = (agent_code or "").strip().lower()
+        if not code:
+            return None
+        resp = self.table.get_item(Key={"sessionId": f"_agent_{code}"})
+        item = resp.get("Item")
+        if not item:
+            return None
+        return _from_dynamo(item)
 
 
 def _to_dynamo(value: Any) -> Any:

@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
 
 from shared.http_util import parse_body, response  # noqa: E402
 from shared.models import to_dict  # noqa: E402
-from shared.service import create_session  # noqa: E402
+from shared.service import api_base_from_event, create_session  # noqa: E402
 
 
 def handler(event, _context):
@@ -20,7 +20,12 @@ def handler(event, _context):
     repo_url = (body.get("repoUrl") or body.get("repo_url") or "").strip()
     if not repo_url:
         return response(400, {"error": "repoUrl is required"})
-    session = create_session(repo_url)
+    agent_code = (body.get("agent_code") or body.get("agentCode") or "").strip() or None
+    session = create_session(
+        repo_url,
+        api_base=api_base_from_event(event),
+        agent_code=agent_code,
+    )
     status = 201 if session.status != "error" else 502
     return response(status, to_dict(session))
 

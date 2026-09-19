@@ -26,7 +26,7 @@ DEFAULT_API = os.environ.get("SETUP_CHECK_API", "__DEFAULT_API__")
 if DEFAULT_API.startswith("__"):
     DEFAULT_API = "http://127.0.0.1:8787"
 
-DEFAULT_AGENT_PORT = int(os.environ.get("SETUP_CHECK_AGENT_PORT", "9876"))
+DEFAULT_AGENT_PORT = int(os.environ.get("SETUP_CHECK_AGENT_PORT", "9877"))
 
 LOG_CAP = 8000
 SERVICE_PORTS = {
@@ -222,6 +222,7 @@ def run_session_check(
     sandbox = None
     workdir: Path | None = Path(local_path) if (is_local and local_path) else None
     cleanup_sandbox = False
+    probe: dict = {"imports": {}}
     try:
         if skip_install:
             print("\n2/4 Skipping dependency install (waiting for your approval in the UI)")
@@ -329,7 +330,23 @@ def run_session_check(
         if cleanup_sandbox and sandbox and os.path.isdir(sandbox):
             shutil.rmtree(sandbox, ignore_errors=True)
 
-    payload = {"fingerprint": fingerprint, "install": install, "boot": boot}
+    # Future-crash dry-run: try importing inferred packages on THIS PC (no install).
+    probe_dir = workdir
+    if probe_dir and probe_dir.is_dir():
+        print("\n   Dry-running imports for crash timeline...")
+        probe = probe_imports(probe_dir, req)
+        ok_n = sum(1 for v in (probe.get("imports") or {}).values() if v is True)
+        fail_n = sum(1 for v in (probe.get("imports") or {}).values() if v is False)
+        print(f"   import probe: {ok_n} ok, {fail_n} missing")
+    else:
+        # Still probe global Python/Node site-packages for inferred package names
+        print("\n   Dry-running imports against this PC (no project folder)...")
+        probe = probe_imports(None, req)
+        fail_n = sum(1 for v in (probe.get("imports") or {}).values() if v is False)
+        if fail_n:
+            print(f"   import probe: {fail_n} package(s) not importable on this PC")
+
+    payload = {"fingerprint": fingerprint, "install": install, "boot": boot, "probe": probe}
     print("\nPosting results to the dashboard...")
     try:
         result = api_post(f"{api}/sessions/{session_id}/results", payload)
@@ -343,6 +360,14 @@ def run_session_check(
         print(f"\nReady: {score}%")
         if summary:
             print(f"  {summary}")
+    crash = result.get("crash_preview") or {}
+    if crash.get("summary"):
+        print(f"\nFuture-crash preview: {crash.get('summary')}")
+        for fr in (crash.get("frames") or [])[:8]:
+            st = (fr.get("status") or "?").upper()
+            print(f"  [{st}] #{fr.get('step')} {fr.get('title')}")
+            if fr.get("would_see") and fr.get("status") == "fail":
+                print(f"         would see: {fr.get('would_see')[:100]}")
     else:
         print("Results posted. Watch the dashboard for the score.")
     return 0
@@ -626,15 +651,87 @@ def serve_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Local agent sidecar for the dashboard")
     parser.add_argument("--port", type=int, default=DEFAULT_AGENT_PORT)
     parser.add_argument("--api", default=DEFAULT_API)
+    parser.add_argument(
+        "--code",
+        default="",
+        help="Agent code shown on the Amplify site (optional; auto-generated if omitted)",
+    )
     args = parser.parse_args(argv)
-    return run_sidecar(port=args.port, default_api=args.api.rstrip("/"))
+    return run_sidecar(port=args.port, default_api=args.api.rstrip("/"), agent_code=args.code)
 
 
-def run_sidecar(*, port: int, default_api: str) -> int:
+def run_sidecar(*, port: int, default_api: str, agent_code: str = "") -> int:
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     jobs: dict[str, str] = {}
     lock = threading.Lock()
+    code = (agent_code or "").strip().lower() or secrets_token(4)
+    stop = threading.Event()
+    server_holder: dict = {"server": None}
+
+    def poll_cloud() -> None:
+        """Amplify cannot call localhost (Chrome loopback block). We poll the API instead."""
+        print(f"\n{'=' * 56}")
+        print(f"  RepoReady laptop agent")
+        print(f"  AGENT CODE  →  {code}")
+        print(f"  Leave this window open. Stop anytime from the website.")
+        print(f"{'=' * 56}\n")
+        while not stop.is_set():
+            try:
+                hb = api_post(f"{default_api}/agent/heartbeat", {"code": code})
+                if isinstance(hb, dict) and hb.get("stop"):
+                    print("\n[agent] Stop requested from RepoReady UI — shutting down.")
+                    stop.set()
+                    srv = server_holder.get("server")
+                    if srv is not None:
+                        threading.Thread(target=srv.shutdown, daemon=True).start()
+                    break
+            except Exception as exc:
+                sys.stderr.write(f"[agent] heartbeat failed: {exc}\n")
+            try:
+                pending = api_get(f"{default_api}/agent/pending?code={code}")
+                sessions = pending.get("sessions") or []
+            except Exception as exc:
+                sys.stderr.write(f"[agent] poll failed: {exc}\n")
+                sessions = []
+            for row in sessions:
+                if stop.is_set():
+                    break
+                sid = (row.get("session_id") or "").strip()
+                if not sid:
+                    continue
+                with lock:
+                    if jobs.get(sid) == "running":
+                        continue
+                    jobs[sid] = "running"
+                print(f"[agent] cloud job → session {sid[:8]}…")
+                try:
+                    local_path = (row.get("local_path") or "").strip()
+                    workdir = Path(local_path).expanduser() if local_path else None
+                    if row.get("needs_hydrate") and workdir and workdir.is_dir():
+                        print(f"[agent] reading local folder {workdir}")
+                        files, tree_paths = collect_local_project(workdir.resolve())
+                        api_post(
+                            f"{default_api}/sessions/{sid}/hydrate",
+                            {"files": files, "tree_paths": tree_paths[:500]},
+                        )
+                    elif row.get("needs_hydrate") and local_path:
+                        raise FileNotFoundError(f"folder not found on this PC: {local_path}")
+                    run_session_check(
+                        sid,
+                        api=default_api,
+                        skip_install=True,
+                        skip_boot=True,
+                        local_workdir=workdir.resolve() if workdir and workdir.is_dir() else None,
+                    )
+                    with lock:
+                        jobs[sid] = "done"
+                except Exception as exc:
+                    with lock:
+                        jobs[sid] = f"error: {exc}"
+                    sys.stderr.write(f"[agent] job error: {exc}\n")
+            if not stop.is_set():
+                stop.wait(3.0)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *a) -> None:  # noqa: N802
@@ -643,7 +740,11 @@ def run_sidecar(*, port: int, default_api: str) -> int:
         def _cors(self) -> None:
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header(
+                "Access-Control-Allow-Headers",
+                "Content-Type, Access-Control-Request-Private-Network",
+            )
+            self.send_header("Access-Control-Allow-Private-Network", "true")
 
         def _json(self, code: int, body: dict) -> None:
             raw = json.dumps(body).encode("utf-8")
@@ -661,7 +762,10 @@ def run_sidecar(*, port: int, default_api: str) -> int:
 
         def do_GET(self) -> None:  # noqa: N802
             if self.path.split("?")[0] in {"/", "/health"}:
-                self._json(200, {"ok": True, "service": "setup-check-agent", "port": port})
+                self._json(
+                    200,
+                    {"ok": True, "service": "setup-check-agent", "port": port, "code": code},
+                )
                 return
             self._json(404, {"error": "not found"})
 
@@ -677,7 +781,6 @@ def run_sidecar(*, port: int, default_api: str) -> int:
             if path == "/run":
                 session_id = (body.get("session_id") or body.get("sessionId") or "").strip()
                 api = (body.get("api") or default_api).rstrip("/")
-                # Default: fingerprint only. Installs require /approve after UI consent.
                 skip_install = body.get("skip_install", True)
                 skip_boot = body.get("skip_boot", True)
                 if "install" in body:
@@ -744,7 +847,6 @@ def run_sidecar(*, port: int, default_api: str) -> int:
             if path == "/local":
                 folder = (body.get("path") or body.get("local_path") or "").strip()
                 api = (body.get("api") or default_api).rstrip("/")
-                # Fingerprint only unless caller explicitly opts into install/boot.
                 skip_install = body.get("skip_install", True)
                 skip_boot = body.get("skip_boot", True)
                 if "install" in body:
@@ -758,17 +860,15 @@ def run_sidecar(*, port: int, default_api: str) -> int:
                 if not target.is_dir():
                     self._json(400, {"error": f"folder not found: {folder}"})
                     return
-
                 try:
                     files, tree_paths = collect_local_project(target.resolve())
-                    session = api_post(
-                        f"{api}/sessions/local",
-                        {
-                            "local_path": str(target.resolve()),
-                            "files": files,
-                            "tree_paths": tree_paths[:500],
-                        },
-                    )
+                    payload = {
+                        "local_path": str(target.resolve()),
+                        "files": files,
+                        "tree_paths": tree_paths[:500],
+                        "agent_code": code,
+                    }
+                    session = api_post(f"{api}/sessions/local", payload)
                 except Exception as exc:
                     self._json(502, {"error": str(exc)})
                     return
@@ -800,16 +900,140 @@ def run_sidecar(*, port: int, default_api: str) -> int:
 
             self._json(404, {"error": "not found"})
 
+    threading.Thread(target=poll_cloud, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"Local agent sidecar listening on http://127.0.0.1:{port}")
-    print(f"Default API: {default_api}")
-    print("Dashboard will auto-trigger checks here — no manual paste needed.")
+    server_holder["server"] = server
+    print(f"RepoReady agent listening on http://127.0.0.1:{port}")
+    print(f"Cloud API: {default_api}")
+    print("Stop from the website with “Stop laptop agent”, or press Ctrl+C here.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nSidecar stopped.")
+        stop.set()
+        print("\nAgent stopped.")
         return 0
+    print("\nAgent stopped.")
     return 0
+
+
+def secrets_token(nbytes: int = 4) -> str:
+    import secrets
+
+    return secrets.token_hex(nbytes)
+
+
+def probe_imports(workdir: Path | None, req: dict) -> dict:
+    """Dry-run third-party imports on THIS PC to feed the future-crash timeline.
+
+    Does not install anything. Uses package names from requirements.packages,
+    or scans a few source files when a workdir is present.
+    """
+    runtime = (req.get("runtime") or "").lower()
+    packages = [str(p) for p in (req.get("packages") or []) if p]
+    if workdir and workdir.is_dir() and not packages:
+        packages = _scan_packages_from_folder(workdir, runtime)
+    packages = packages[:12]
+    results: dict[str, bool | None] = {}
+    if not packages:
+        return {"imports": results, "runtime": runtime or None}
+
+    if runtime == "python" or (not runtime and packages):
+        for pkg in packages:
+            mod = _pip_to_import(pkg)
+            results[pkg] = _can_import_python(mod, workdir)
+    if runtime == "node":
+        for pkg in packages:
+            results[pkg] = _can_resolve_node(pkg, workdir)
+    return {"imports": results, "runtime": runtime or None}
+
+
+def _pip_to_import(pkg: str) -> str:
+    mapping = {
+        "scikit-learn": "sklearn",
+        "opencv-python": "cv2",
+        "Pillow": "PIL",
+        "PyYAML": "yaml",
+        "beautifulsoup4": "bs4",
+        "python-dotenv": "dotenv",
+        "Flask-SQLAlchemy": "flask_sqlalchemy",
+        "Flask-Cors": "flask_cors",
+        "djangorestframework": "rest_framework",
+        "python-jose": "jose",
+        "PyJWT": "jwt",
+        "pycryptodome": "Crypto",
+    }
+    if pkg in mapping:
+        return mapping[pkg]
+    return pkg.replace("-", "_").split("[")[0]
+
+
+def _can_import_python(mod: str, workdir: Path | None) -> bool:
+    code = f"import {mod}"
+    cmd = [sys.executable, "-c", code]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=8,
+            cwd=str(workdir) if workdir and workdir.is_dir() else None,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+def _can_resolve_node(pkg: str, workdir: Path | None) -> bool | None:
+    node = shutil.which("node") or shutil.which("node.exe")
+    if not node:
+        return False
+    # Prefer project node_modules when present
+    script = f"try{{require.resolve({json.dumps(pkg)}); process.exit(0)}}catch(e){{process.exit(1)}}"
+    cwd = str(workdir) if workdir and workdir.is_dir() else None
+    try:
+        proc = subprocess.run(
+            [node, "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            cwd=cwd,
+        )
+        if proc.returncode == 0:
+            return True
+        # Also try without local folder (global) — still False means missing for student
+        return False
+    except Exception:
+        return None
+
+
+def _scan_packages_from_folder(folder: Path, runtime: str) -> list[str]:
+    names: set[str] = set()
+    patterns = ("*.py",) if runtime == "python" else ("*.js", "*.ts", "*.tsx", "*.jsx", "*.mjs", "*.py")
+    files: list[Path] = []
+    for pat in patterns:
+        files.extend(list(folder.glob(pat))[:6])
+        files.extend(list(folder.glob(f"src/{pat}"))[:4])
+    std = {
+        "os", "sys", "re", "json", "time", "datetime", "pathlib", "typing", "collections",
+        "asyncio", "logging", "subprocess", "flask",  # flask kept as package
+    }
+    # Actually flask is NOT stdlib — remove it
+    std.discard("flask")
+    py_from = __import__("re").compile(
+        r"^\s*(?:from\s+([a-zA-Z_][\w.]*)\s+import|import\s+([a-zA-Z_][\w.]*))",
+        __import__("re").MULTILINE,
+    )
+    for fp in files[:12]:
+        try:
+            text = fp.read_text(encoding="utf-8", errors="ignore")[:5000]
+        except OSError:
+            continue
+        if fp.suffix == ".py":
+            for m in py_from.finditer(text):
+                mod = (m.group(1) or m.group(2) or "").split(".")[0]
+                if mod and mod not in std and not mod.startswith("_"):
+                    names.add(mod)
+    return sorted(names)[:12]
 
 
 def fingerprint_machine(req: dict) -> dict:

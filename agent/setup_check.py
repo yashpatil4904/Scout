@@ -26,7 +26,7 @@ DEFAULT_API = os.environ.get("SETUP_CHECK_API", "__DEFAULT_API__")
 if DEFAULT_API.startswith("__"):
     DEFAULT_API = "http://127.0.0.1:8787"
 
-DEFAULT_AGENT_PORT = int(os.environ.get("SETUP_CHECK_AGENT_PORT", "9876"))
+DEFAULT_AGENT_PORT = int(os.environ.get("SETUP_CHECK_AGENT_PORT", "9877"))
 
 LOG_CAP = 8000
 SERVICE_PORTS = {
@@ -651,15 +651,87 @@ def serve_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Local agent sidecar for the dashboard")
     parser.add_argument("--port", type=int, default=DEFAULT_AGENT_PORT)
     parser.add_argument("--api", default=DEFAULT_API)
+    parser.add_argument(
+        "--code",
+        default="",
+        help="Agent code shown on the Amplify site (optional; auto-generated if omitted)",
+    )
     args = parser.parse_args(argv)
-    return run_sidecar(port=args.port, default_api=args.api.rstrip("/"))
+    return run_sidecar(port=args.port, default_api=args.api.rstrip("/"), agent_code=args.code)
 
 
-def run_sidecar(*, port: int, default_api: str) -> int:
+def run_sidecar(*, port: int, default_api: str, agent_code: str = "") -> int:
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     jobs: dict[str, str] = {}
     lock = threading.Lock()
+    code = (agent_code or "").strip().lower() or secrets_token(4)
+    stop = threading.Event()
+    server_holder: dict = {"server": None}
+
+    def poll_cloud() -> None:
+        """Amplify cannot call localhost (Chrome loopback block). We poll the API instead."""
+        print(f"\n{'=' * 56}")
+        print(f"  RepoReady laptop agent")
+        print(f"  AGENT CODE  →  {code}")
+        print(f"  Leave this window open. Stop anytime from the website.")
+        print(f"{'=' * 56}\n")
+        while not stop.is_set():
+            try:
+                hb = api_post(f"{default_api}/agent/heartbeat", {"code": code})
+                if isinstance(hb, dict) and hb.get("stop"):
+                    print("\n[agent] Stop requested from RepoReady UI — shutting down.")
+                    stop.set()
+                    srv = server_holder.get("server")
+                    if srv is not None:
+                        threading.Thread(target=srv.shutdown, daemon=True).start()
+                    break
+            except Exception as exc:
+                sys.stderr.write(f"[agent] heartbeat failed: {exc}\n")
+            try:
+                pending = api_get(f"{default_api}/agent/pending?code={code}")
+                sessions = pending.get("sessions") or []
+            except Exception as exc:
+                sys.stderr.write(f"[agent] poll failed: {exc}\n")
+                sessions = []
+            for row in sessions:
+                if stop.is_set():
+                    break
+                sid = (row.get("session_id") or "").strip()
+                if not sid:
+                    continue
+                with lock:
+                    if jobs.get(sid) == "running":
+                        continue
+                    jobs[sid] = "running"
+                print(f"[agent] cloud job → session {sid[:8]}…")
+                try:
+                    local_path = (row.get("local_path") or "").strip()
+                    workdir = Path(local_path).expanduser() if local_path else None
+                    if row.get("needs_hydrate") and workdir and workdir.is_dir():
+                        print(f"[agent] reading local folder {workdir}")
+                        files, tree_paths = collect_local_project(workdir.resolve())
+                        api_post(
+                            f"{default_api}/sessions/{sid}/hydrate",
+                            {"files": files, "tree_paths": tree_paths[:500]},
+                        )
+                    elif row.get("needs_hydrate") and local_path:
+                        raise FileNotFoundError(f"folder not found on this PC: {local_path}")
+                    run_session_check(
+                        sid,
+                        api=default_api,
+                        skip_install=True,
+                        skip_boot=True,
+                        local_workdir=workdir.resolve() if workdir and workdir.is_dir() else None,
+                    )
+                    with lock:
+                        jobs[sid] = "done"
+                except Exception as exc:
+                    with lock:
+                        jobs[sid] = f"error: {exc}"
+                    sys.stderr.write(f"[agent] job error: {exc}\n")
+            if not stop.is_set():
+                stop.wait(3.0)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *a) -> None:  # noqa: N802
@@ -668,7 +740,11 @@ def run_sidecar(*, port: int, default_api: str) -> int:
         def _cors(self) -> None:
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header(
+                "Access-Control-Allow-Headers",
+                "Content-Type, Access-Control-Request-Private-Network",
+            )
+            self.send_header("Access-Control-Allow-Private-Network", "true")
 
         def _json(self, code: int, body: dict) -> None:
             raw = json.dumps(body).encode("utf-8")
@@ -686,7 +762,10 @@ def run_sidecar(*, port: int, default_api: str) -> int:
 
         def do_GET(self) -> None:  # noqa: N802
             if self.path.split("?")[0] in {"/", "/health"}:
-                self._json(200, {"ok": True, "service": "setup-check-agent", "port": port})
+                self._json(
+                    200,
+                    {"ok": True, "service": "setup-check-agent", "port": port, "code": code},
+                )
                 return
             self._json(404, {"error": "not found"})
 
@@ -702,7 +781,6 @@ def run_sidecar(*, port: int, default_api: str) -> int:
             if path == "/run":
                 session_id = (body.get("session_id") or body.get("sessionId") or "").strip()
                 api = (body.get("api") or default_api).rstrip("/")
-                # Default: fingerprint only. Installs require /approve after UI consent.
                 skip_install = body.get("skip_install", True)
                 skip_boot = body.get("skip_boot", True)
                 if "install" in body:
@@ -769,7 +847,6 @@ def run_sidecar(*, port: int, default_api: str) -> int:
             if path == "/local":
                 folder = (body.get("path") or body.get("local_path") or "").strip()
                 api = (body.get("api") or default_api).rstrip("/")
-                # Fingerprint only unless caller explicitly opts into install/boot.
                 skip_install = body.get("skip_install", True)
                 skip_boot = body.get("skip_boot", True)
                 if "install" in body:
@@ -783,17 +860,15 @@ def run_sidecar(*, port: int, default_api: str) -> int:
                 if not target.is_dir():
                     self._json(400, {"error": f"folder not found: {folder}"})
                     return
-
                 try:
                     files, tree_paths = collect_local_project(target.resolve())
-                    session = api_post(
-                        f"{api}/sessions/local",
-                        {
-                            "local_path": str(target.resolve()),
-                            "files": files,
-                            "tree_paths": tree_paths[:500],
-                        },
-                    )
+                    payload = {
+                        "local_path": str(target.resolve()),
+                        "files": files,
+                        "tree_paths": tree_paths[:500],
+                        "agent_code": code,
+                    }
+                    session = api_post(f"{api}/sessions/local", payload)
                 except Exception as exc:
                     self._json(502, {"error": str(exc)})
                     return
@@ -825,16 +900,26 @@ def run_sidecar(*, port: int, default_api: str) -> int:
 
             self._json(404, {"error": "not found"})
 
+    threading.Thread(target=poll_cloud, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"Local agent sidecar listening on http://127.0.0.1:{port}")
-    print(f"Default API: {default_api}")
-    print("Dashboard will auto-trigger checks here — no manual paste needed.")
+    server_holder["server"] = server
+    print(f"RepoReady agent listening on http://127.0.0.1:{port}")
+    print(f"Cloud API: {default_api}")
+    print("Stop from the website with “Stop laptop agent”, or press Ctrl+C here.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nSidecar stopped.")
+        stop.set()
+        print("\nAgent stopped.")
         return 0
+    print("\nAgent stopped.")
     return 0
+
+
+def secrets_token(nbytes: int = 4) -> str:
+    import secrets
+
+    return secrets.token_hex(nbytes)
 
 
 def probe_imports(workdir: Path | None, req: dict) -> dict:

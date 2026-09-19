@@ -60,7 +60,24 @@ MANIFEST_CANDIDATES = [
 
 
 def public_api_base() -> str:
-    return os.environ.get("PUBLIC_API_BASE", "http://127.0.0.1:8787").rstrip("/")
+    return (os.environ.get("PUBLIC_API_BASE") or "http://127.0.0.1:8787").rstrip("/")
+
+
+def api_base_from_event(event: dict | None) -> str:
+    """Resolve the public API URL from API Gateway without CloudFormation circular deps."""
+    if not event:
+        return public_api_base()
+    ctx = event.get("requestContext") or {}
+    domain = ctx.get("domainName") or ""
+    if domain:
+        return f"https://{domain}".rstrip("/")
+    headers = event.get("headers") or {}
+    # HTTP API may lowercase headers
+    host = headers.get("host") or headers.get("Host") or ""
+    if host and "localhost" not in host and "127.0.0.1" not in host:
+        proto = headers.get("x-forwarded-proto") or headers.get("X-Forwarded-Proto") or "https"
+        return f"{proto}://{host}".rstrip("/")
+    return public_api_base()
 
 
 def make_agent_command(session_id: str, api_base: str | None = None) -> AgentCommand:
@@ -72,11 +89,17 @@ def make_agent_command(session_id: str, api_base: str | None = None) -> AgentCom
     )
 
 
-def create_session(repo_url: str, store: SessionStore | None = None) -> Session:
+def create_session(
+    repo_url: str,
+    store: SessionStore | None = None,
+    api_base: str | None = None,
+    agent_code: str | None = None,
+) -> Session:
     store = store or get_store()
     owner, repo = parse_repo_url(repo_url)
     session_id = uuid4().hex
     now = _now()
+    code = (agent_code or "").strip().lower() or None
     session = Session(
         session_id=session_id,
         repo_url=f"https://github.com/{owner}/{repo}",
@@ -86,7 +109,8 @@ def create_session(repo_url: str, store: SessionStore | None = None) -> Session:
         source="github",
         install=InstallResult(),
         boot=BootResult(),
-        agent_command=make_agent_command(session_id),
+        agent_command=make_agent_command(session_id, api_base=api_base),
+        agent_code=code,
         created_at=now,
         updated_at=now,
     )
@@ -150,6 +174,8 @@ def create_local_session(
     files: dict[str, str] | None = None,
     tree_paths: list[str] | None = None,
     store: SessionStore | None = None,
+    api_base: str | None = None,
+    agent_code: str | None = None,
 ) -> Session:
     """Create a session from a folder on the user's machine (manifests uploaded by the agent)."""
     store = store or get_store()
@@ -161,6 +187,7 @@ def create_local_session(
     session_id = uuid4().hex
     now = _now()
     name = path.replace("\\", "/").rstrip("/").split("/")[-1] or "local-project"
+    code = (agent_code or "").strip().lower() or None
     session = Session(
         session_id=session_id,
         repo_url=f"local://{path}",
@@ -171,7 +198,8 @@ def create_local_session(
         local_path=path,
         install=InstallResult(),
         boot=BootResult(),
-        agent_command=make_agent_command(session_id),
+        agent_command=make_agent_command(session_id, api_base=api_base),
+        agent_code=code,
         created_at=now,
         updated_at=now,
     )
@@ -259,6 +287,148 @@ def ingest_results(session_id: str, payload: dict, store: SessionStore | None = 
     )
     session.crash_preview = preview.to_dict()
     session.status = "complete"
+    session.updated_at = _now()
+    store.update(session)
+    return session
+
+
+def agent_heartbeat(agent_code: str, store: SessionStore | None = None) -> dict:
+    store = store or get_store()
+    code = (agent_code or "").strip().lower()
+    if not code:
+        raise ValueError("code is required")
+    prev = store.get_agent_heartbeat(code) or {}
+    should_stop = bool(prev.get("stop"))
+    # Heartbeat clears the stop latch after the agent observes it.
+    store.put_agent_heartbeat(code, stop=False)
+    return {"ok": True, "code": code, "stop": should_stop}
+
+
+def request_agent_stop(agent_code: str, store: SessionStore | None = None) -> dict:
+    store = store or get_store()
+    code = (agent_code or "").strip().lower()
+    if not code:
+        raise ValueError("code is required")
+    store.request_agent_stop(code)
+    return {"ok": True, "code": code, "stopping": True}
+
+
+def agent_status(agent_code: str, store: SessionStore | None = None) -> dict:
+    """UI polls this over HTTPS — never touches localhost."""
+    import time
+
+    store = store or get_store()
+    code = (agent_code or "").strip().lower()
+    if not code:
+        return {"ok": False, "online": False, "error": "code required"}
+    row = store.get_agent_heartbeat(code)
+    if not row:
+        return {"ok": True, "online": False, "code": code}
+    last = float(row.get("last_seen") or 0)
+    online = (time.time() - last) < 12  # heartbeat every ~3s
+    return {"ok": True, "online": online, "code": code, "last_seen": last}
+
+
+def list_pending_sessions(agent_code: str, store: SessionStore | None = None) -> list[dict]:
+    store = store or get_store()
+    code = (agent_code or "").strip().lower()
+    sessions = store.list_pending_for_agent(code)
+    return [
+        {
+            "session_id": s.session_id,
+            "repo_url": s.repo_url,
+            "status": s.status,
+            "source": s.source,
+            "local_path": s.local_path,
+            "needs_hydrate": s.source == "local"
+            and not (s.requirements and s.requirements.runtime),
+        }
+        for s in sessions
+    ]
+
+
+def create_local_intent(
+    local_path: str,
+    agent_code: str | None = None,
+    api_base: str | None = None,
+    store: SessionStore | None = None,
+) -> Session:
+    """Cloud-only: queue a local-folder scan for the laptop agent (no browser→localhost)."""
+    store = store or get_store()
+    path = (local_path or "").strip()
+    if not path:
+        raise ValueError("local_path is required")
+    code = (agent_code or "").strip().lower() or None
+    if not code:
+        raise ValueError("agent_code is required — connect your laptop first")
+    session_id = uuid4().hex
+    now = _now()
+    name = path.replace("\\", "/").rstrip("/").split("/")[-1] or "local-project"
+    session = Session(
+        session_id=session_id,
+        repo_url=f"local://{path}",
+        status="awaiting_agent",
+        owner="local",
+        repo=name,
+        source="local",
+        local_path=path,
+        install=InstallResult(),
+        boot=BootResult(),
+        agent_command=make_agent_command(session_id, api_base=api_base),
+        agent_code=code,
+        requirements=Requirements(
+            notes=["Waiting for laptop agent to read this folder"],
+            inferred=True,
+        ),
+        created_at=now,
+        updated_at=now,
+    )
+    store.put(session)
+    return session
+
+
+def hydrate_local_session(
+    session_id: str,
+    files: dict[str, str] | None = None,
+    tree_paths: list[str] | None = None,
+    store: SessionStore | None = None,
+) -> Session:
+    """Agent uploads folder manifests/snippets; we analyze then leave awaiting fingerprint."""
+    store = store or get_store()
+    session = store.get(session_id)
+    if not session:
+        raise KeyError(session_id)
+    path = session.local_path or ""
+    files = files or {}
+    tree_paths = tree_paths or list(files.keys())
+    req = parse_manifests(files) if files else Requirements()
+    snippets = {
+        k: v
+        for k, v in files.items()
+        if k.endswith((".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".md"))
+    }
+    if needs_inference(req):
+        req = _heuristic_from_paths(req, tree_paths)
+        if snippets:
+            _heuristic_from_snippets(req, snippets)
+        req.inferred = True
+        if not req.manifests_found:
+            req.notes.append("No dependency manifest found — requirements inferred from local source")
+        _defaults(req)
+        req.env_vars = sorted(set(req.env_vars))
+        req.services = sorted(set(req.services))
+    req = agents.refine_requirements(
+        req,
+        tree_paths,
+        snippets,
+        origin=f"local:{path}",
+    )
+    pkgs = extract_packages_from_snippets(snippets, req.runtime)
+    if pkgs:
+        req.packages = sorted(set(req.packages or []) | set(pkgs))
+    session.requirements = req
+    session.analysis_snippets = {k: v[:2000] for k, v in list(snippets.items())[:8]}
+    session.status = "awaiting_agent"
     session.updated_at = _now()
     store.update(session)
     return session

@@ -6,12 +6,17 @@ import CrashTimeline from "./components/CrashTimeline";
 import ScoreGauge from "./components/ScoreGauge";
 import {
   API_BASE,
+  USE_CLOUD_AGENT,
   approveInstall,
+  connectAgentDownloadUrl,
   createSession,
+  getSavedAgentCode,
   getSession,
   probeBedrock,
   probeLocalAgent,
   rescanSession,
+  saveAgentCode,
+  stopLaptopAgent,
   triggerAgentRun,
   triggerLocalFolderCheck,
 } from "./api";
@@ -22,7 +27,7 @@ type Mode = "github" | "local";
 const EXAMPLES = [
   "https://github.com/pallets/flask",
   "https://github.com/expressjs/express",
-  "https://github.com/octocat/Hello-World",
+  "https://github.com/tiangolo/fastapi",
 ];
 
 export default function App() {
@@ -35,6 +40,21 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [agentOnline, setAgentOnline] = useState<boolean | null>(null);
   const [bedrockOn, setBedrockOn] = useState<boolean | null>(null);
+  const [agentCodeInput, setAgentCodeInput] = useState(() => getSavedAgentCode());
+  const [stoppingAgent, setStoppingAgent] = useState(false);
+
+  // Auto-link when connect.cmd opens Amplify with ?code=
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = (params.get("code") || "").trim().toLowerCase();
+    if (code.length >= 4) {
+      saveAgentCode(code);
+      setAgentCodeInput(code);
+      params.delete("code");
+      const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${window.location.hash}`;
+      window.history.replaceState({}, "", next);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,12 +66,12 @@ export default function App() {
       }
     }
     tick();
-    const id = window.setInterval(tick, 4000);
+    const id = window.setInterval(tick, USE_CLOUD_AGENT ? 3000 : 4000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, []);
+  }, [agentCodeInput]);
 
   useEffect(() => {
     if (!session?.session_id) return;
@@ -87,24 +107,16 @@ export default function App() {
         setAgentPhase(null);
         return;
       }
-      setAgentPhase("Fingerprinting this machine (no installs yet)…");
+      setAgentPhase(
+        USE_CLOUD_AGENT
+          ? "Waiting for your laptop agent (cloud poll)…"
+          : "Fingerprinting this machine (no installs yet)…",
+      );
       const triggered = await triggerAgentRun(created.session_id);
       if (!triggered.ok) {
-        // Backend may have already auto-triggered; probe again briefly.
-        const online = await probeLocalAgent();
-        setAgentOnline(online);
-        if (!online) {
-          setError(triggered.error || "Local agent offline");
-          setAgentPhase(null);
-          setBusy(false);
-          return;
-        }
-        const retry = await triggerAgentRun(created.session_id);
-        if (!retry.ok) {
-          setError(retry.error || "Could not start local agent");
-          setAgentPhase(null);
-          setBusy(false);
-        }
+        setError(triggered.error || "Connect laptop agent first");
+        setAgentPhase(null);
+        setBusy(false);
       }
     } catch (err) {
       setSession(null);
@@ -125,7 +137,9 @@ export default function App() {
       setAgentOnline(online);
       if (!online) {
         setError(
-          "Local agent is offline. Start the backend (`python backend/dev_server.py`) — it auto-starts the agent — or run `python agent/setup_check.py serve`.",
+          USE_CLOUD_AGENT
+            ? "Laptop agent not linked. Click “Download & run connector” once and leave that window open."
+            : "Local agent is offline. Run python agent/setup_check.py serve",
         );
         setBusy(false);
         setAgentPhase(null);
@@ -144,7 +158,11 @@ export default function App() {
         const created = await getSession(result.sessionId);
         setSession(created);
       }
-      setAgentPhase("Fingerprinting this machine (no installs yet)…");
+      setAgentPhase(
+        USE_CLOUD_AGENT
+          ? "Laptop agent is reading that folder…"
+          : "Fingerprinting this machine (no installs yet)…",
+      );
     } catch (err) {
       setSession(null);
       setError(err instanceof Error ? err.message : "Request failed");
@@ -215,6 +233,19 @@ export default function App() {
     setAgentPhase(null);
   }
 
+  async function onStopAgent() {
+    setStoppingAgent(true);
+    setError(null);
+    const result = await stopLaptopAgent();
+    setStoppingAgent(false);
+    if (!result.ok) {
+      setError(result.error || "Could not stop agent");
+      return;
+    }
+    setAgentOnline(false);
+    setAgentPhase(null);
+  }
+
   const percent = session?.score?.percent ?? null;
   const label = useMemo(
     () => headline(session, busy, agentPhase, mode),
@@ -223,18 +254,22 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-ink-950">
-      <header className="flex items-baseline justify-between border-b border-ink-700 px-6 py-4 md:px-10">
+      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-ink-700 px-6 py-5 md:px-10">
         <div>
-          <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-slate-500">
-            AWS Ship It
+          <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-moss">RepoReady</p>
+          <h1 className="font-display text-2xl text-paper md:text-3xl">
+            Will this repo run on your laptop?
+          </h1>
+          <p className="mt-1 max-w-xl text-sm text-slate-400">
+            Compare what the project needs vs what you have installed — before you waste hours on
+            setup.
           </p>
-          <h1 className="font-display text-2xl text-paper">Setup Readiness Checker</h1>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-col items-end gap-2">
           <p className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
-            {bedrockOn ? "LLM scoring on" : "heuristic scoring"}
+            {bedrockOn ? "AI scoring on" : "heuristic scoring"}
           </p>
-          <AgentStatus online={agentOnline} />
+          <AgentStatus online={agentOnline} onStop={onStopAgent} stopping={stoppingAgent} />
         </div>
       </header>
 
@@ -252,11 +287,11 @@ export default function App() {
           {mode === "github" ? (
             <form onSubmit={onGithubSubmit} className="border border-ink-700 bg-ink-900 p-5">
               <label className="font-mono text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                Public GitHub repo
+                Paste a public GitHub repo
               </label>
               <p className="mt-2 text-sm text-slate-400">
-                We fingerprint your PC first, infer what the repo needs, then tell you which
-                software to install. Env/config is separate — nothing installs until you approve.
+                We infer runtime &amp; deps (even without a README), then show what to install on{" "}
+                <em className="text-paper">this</em> PC. Nothing installs until you approve.
               </p>
               <div className="mt-3 flex flex-col gap-3 sm:flex-row">
                 <input
@@ -270,7 +305,7 @@ export default function App() {
                   disabled={busy || !url.trim()}
                   className="shrink-0 bg-moss px-5 py-3 font-mono text-xs uppercase tracking-[0.16em] text-ink-950 disabled:opacity-40"
                 >
-                  {busy ? "Checking…" : "Check setup"}
+                  {busy ? "Checking…" : "Check my laptop"}
                 </button>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
@@ -290,11 +325,11 @@ export default function App() {
           ) : (
             <form onSubmit={onLocalSubmit} className="border border-ink-700 bg-ink-900 p-5">
               <label className="font-mono text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                Folder you are working in
+                Path to a folder on this PC
               </label>
               <p className="mt-2 text-sm text-slate-400">
-                Checks the project on this laptop. First pass is fingerprint-only; each missing
-                tool or dependency install asks for your OK.
+                Your linked laptop agent reads that folder locally — the cloud never sees your full
+                source tree beyond setup manifests.
               </p>
               <div className="mt-3 flex flex-col gap-3 sm:flex-row">
                 <input
@@ -315,12 +350,14 @@ export default function App() {
                   {busy ? "Checking…" : "Check folder"}
                 </button>
               </div>
-              <p className="mt-3 font-mono text-[11px] text-slate-500">
-                CLI equivalent:{" "}
-                <span className="text-moss">
+              <details className="mt-3">
+                <summary className="cursor-pointer font-mono text-[11px] text-slate-500">
+                  Prefer CLI?
+                </summary>
+                <p className="mt-2 break-all font-mono text-[11px] text-moss">
                   python agent/setup_check.py --path &quot;{localPath || "."}&quot; --api {API_BASE}
-                </span>
-              </p>
+                </p>
+              </details>
               {error ? <p className="mt-3 font-mono text-sm text-rust">{error}</p> : null}
             </form>
           )}
@@ -371,27 +408,21 @@ export default function App() {
             {agentOnline ? (
               <>
                 <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-moss">
-                  Local agent connected
+                  Laptop linked
                 </p>
                 <p className="mt-2">
-                  Checks run on <em className="text-paper">this</em> laptop. Missing software is{" "}
-                  <em className="text-paper">not</em> installed until you click Install on each
-                  blocker.
+                  Checks run on your machine. Use <em className="text-paper">Stop agent</em> in the
+                  header when you&apos;re done — no need to touch the terminal.
                 </p>
               </>
             ) : (
-              <>
-                <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-pollen">
-                  Start local agent once
-                </p>
-                <p className="mt-2">
-                  The browser cannot fingerprint your machine by itself. Start the API (it launches
-                  the agent) or run:
-                </p>
-                <pre className="mt-3 overflow-x-auto bg-ink-950 p-3 font-mono text-xs text-moss">
-                  python backend/dev_server.py
-                </pre>
-              </>
+              <AgentBootstrap
+                agentCodeInput={agentCodeInput}
+                setAgentCodeInput={setAgentCodeInput}
+                onCodeSaved={() => {
+                  /* probe effect depends on agentCodeInput */
+                }}
+              />
             )}
             {agentPhase ? (
               <p className="mt-3 font-mono text-xs text-pollen">{agentPhase}</p>
@@ -409,10 +440,10 @@ export default function App() {
           {session?.requirements ? (
             <div className="border border-ink-700 bg-ink-900 p-5">
               <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                What {session.source === "local" ? "this folder" : "the repo"} needs
-                {session.requirements.inferred ? " · inferred" : ""}
+                Project needs
+                {session.requirements.inferred ? " · inferred from source" : ""}
                 {session.requirements.notes?.some((n) => n.includes("RepoAnalystAgent"))
-                  ? " · LLM"
+                  ? " · AI"
                   : ""}
               </p>
               {session.local_path ? (
@@ -465,6 +496,67 @@ export default function App() {
   );
 }
 
+function AgentBootstrap({
+  agentCodeInput,
+  setAgentCodeInput,
+  onCodeSaved,
+}: {
+  agentCodeInput: string;
+  setAgentCodeInput: (v: string) => void;
+  onCodeSaved: () => void;
+}) {
+  const downloadUrl = connectAgentDownloadUrl();
+
+  function saveCode() {
+    saveAgentCode(agentCodeInput);
+    onCodeSaved();
+  }
+
+  return (
+    <>
+      <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-pollen">
+        Step 1 — link this laptop
+      </p>
+      <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-slate-300">
+        <li>Click the button — downloads a tiny helper</li>
+        <li>Double-click it (Allow if Windows asks)</li>
+        <li>This page links automatically — then check any repo</li>
+      </ol>
+      <a
+        href={downloadUrl}
+        className="mt-4 inline-block bg-moss px-4 py-3 font-mono text-xs uppercase tracking-[0.16em] text-ink-950"
+      >
+        Connect my laptop
+      </a>
+      <p className="mt-3 font-mono text-[10px] text-slate-500">
+        A black window stays open while linked. Stop it anytime with <span className="text-paper">Stop agent</span> in
+        the top-right.
+      </p>
+      <details className="mt-4">
+        <summary className="cursor-pointer font-mono text-[11px] text-slate-500">
+          Troubleshooting / paste code
+        </summary>
+        <div className="mt-2 flex gap-2">
+          <input
+            value={agentCodeInput}
+            onChange={(e) => setAgentCodeInput(e.target.value.trim().toLowerCase())}
+            placeholder="code from helper window"
+            className="w-full border border-ink-700 bg-ink-950 px-3 py-2 font-mono text-sm text-paper outline-none focus:border-moss"
+          />
+          <button
+            type="button"
+            onClick={saveCode}
+            disabled={agentCodeInput.length < 4}
+            className="shrink-0 border border-ink-700 px-4 py-2 font-mono text-[11px] uppercase tracking-wider text-slate-300 disabled:opacity-40"
+          >
+            Link
+          </button>
+        </div>
+      </details>
+    </>
+  );
+}
+
 function ModeTab({
   active,
   onClick,
@@ -508,14 +600,14 @@ function headline(
   if (busy) return mode === "local" ? "Checking local folder…" : "Reading the repository…";
   if (!session) {
     return mode === "local"
-      ? "Point at a folder on this laptop. Get one number back."
-      : "Paste a GitHub URL. Get one number back.";
+      ? "Link your laptop, then point at a project folder."
+      : "Link your laptop, then paste a GitHub URL.";
   }
-  if (session.status === "error") return session.error || "Analyze failed";
-  if (session.status === "awaiting_agent") return "Local agent is running the check…";
-  if (session.status === "scoring") return "Comparing this laptop to the project…";
+  if (session.status === "error") return session.error || "Check failed";
+  if (session.status === "awaiting_agent") return "Your laptop agent is scanning…";
+  if (session.status === "scoring") return "Comparing PC ↔ project…";
   if (session.score?.summary) return session.score.summary;
-  return "Waiting for the local agent";
+  return "Waiting for your laptop…";
 }
 
 function describeRuntime(session: Session): string {

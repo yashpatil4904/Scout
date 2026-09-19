@@ -14,7 +14,11 @@ frontend:
   cache:
     paths:
       - frontend/node_modules/**/*
-# Set Amplify env vars before build:
-#   VITE_API_URL = SAM output ApiBaseUrl (https://xxxx.execute-api.us-east-1.amazonaws.com)
+  customHeaders:
+    - pattern: "**/*"
+      headers:
+        - key: "Cache-Control"
+          value: "public,max-age=0,must-revalidate"
+# Set Amplify env before Git builds:
+#   VITE_API_URL = https://xxxx.execute-api.us-east-1.amazonaws.com
 #   VITE_AGENT_URL = http://127.0.0.1:9877
-
