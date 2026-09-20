@@ -1,4 +1,4 @@
-# RepoReady
+# Scout
 
 ### Will this repo run on *your* laptop — before you waste hours finding out?
 
@@ -6,7 +6,7 @@
 **Live app:** [https://main.d3qwc7ge49pla9.amplifyapp.com](https://main.d3qwc7ge49pla9.amplifyapp.com)  
 **API:** [https://7j9hs02vo4.execute-api.us-east-1.amazonaws.com](https://7j9hs02vo4.execute-api.us-east-1.amazonaws.com) · `GET /health`
 
-> Students, hackathon teammates, and juniors constantly lose evenings to “dependency hell”: wrong Python, missing Node, never-pushed `node_modules`, silent env crashes. CI and Dev Containers assume scaffolding already exists. **RepoReady gives one readiness score for *this PC* vs *this project*, plus an ordered future-crash timeline — and never installs anything until you approve.**
+> Students, hackathon teammates, and juniors constantly lose evenings to “dependency hell”: wrong Python, missing Node, never-pushed `node_modules`, silent env crashes. CI and Dev Containers assume scaffolding already exists. **Scout gives one readiness score for *this PC* vs *this project*, plus an ordered future-crash timeline — and never installs anything until you approve.**
 
 ---
 
@@ -31,7 +31,7 @@
 | Dev Containers / Docker-first | Heavy; many student repos have no Dockerfile |
 | Cloning + `npm install` blind | Failures appear late; `node_modules` was never in Git |
 
-**RepoReady’s bet:** separate **what the repo needs** (cloud) from **what this laptop has** (local agent). Compare them. Show the first crash you’ll hit if you run it *now*.
+**Scout’s bet:** separate **what the repo needs** (cloud) from **what this laptop has** (local agent). Compare them. Show the first crash you’ll hit if you run it *now*.
 
 ---
 
@@ -51,7 +51,7 @@
 ```mermaid
 flowchart LR
   subgraph User["Developer laptop"]
-    UI["Amplify SPA\nRepoReady UI"]
+    UI["Amplify SPA\nScout UI"]
     AG["Local agent\nsetup_check.py serve"]
   end
 
@@ -111,7 +111,7 @@ sequenceDiagram
 
 ## AWS services used (Ship It mandatory map)
 
-| Ship It category | Service | Role in RepoReady |
+| Ship It category | Service | Role in Scout |
 | --- | --- | --- |
 | **Serverless** | **AWS Lambda** | Analyze repo, ingest fingerprint, agent bridge, health |
 | **Serverless** | **API Gateway** (HTTP API) | Public HTTPS API for UI + agent |
@@ -128,7 +128,7 @@ sequenceDiagram
 
 ## Try it (60 seconds)
 
-1. Open **[RepoReady](https://main.d3qwc7ge49pla9.amplifyapp.com)** (hard-refresh if needed).  
+1. Open **[Scout](https://main.d3qwc7ge49pla9.amplifyapp.com)** (hard-refresh if needed).  
 2. **Copy PowerShell command** → run in a terminal → leave window open.  
 3. Wait until UI shows **laptop linked** and your real Python / Node / git.  
 4. Paste a public repo (e.g. `https://github.com/pallets/flask`) → **Check my laptop**.  
@@ -255,7 +255,7 @@ GitHub clones do **not** spam missing `node_modules` packages (those folders are
 
 ## One-liner
 
-**RepoReady** — serverless setup readiness on Amplify + Lambda + DynamoDB: a local laptop agent and LLM ScoreAgent so you know what to install *before* the first crash.
+**Scout** — serverless setup readiness on Amplify + Lambda + DynamoDB: a local laptop agent and LLM ScoreAgent so you know what to install *before* the first crash.
 
 ---
 
